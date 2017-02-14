@@ -20,6 +20,8 @@
                 'exclude': '.exc',    //要排除的图片
                 'delay': 300                //延迟时间
             });
+
+            $('.copy-time').html(new Date().getFullYear());
         });
 		
         (function() {
@@ -176,7 +178,7 @@
                         <a href="https://biji.io" target="_blank">Author Blog</a>
                     </p>
                     <p class="legal-copyright">
-                        <a class="logo" href="https://biji.io"></a> © 2017 Biji.IO. All rights reserved.
+                        <a class="logo" href="https://biji.io"></a> © <time class="copy-time"></time> Biji.IO. All rights reserved.
                     </p>
                 </div>
             </div>
