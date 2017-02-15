@@ -688,6 +688,8 @@ a.pure-button-primary {
         position: fixed;
         top: 0;
         left: 0;
+        background:#fff;
+        z-index:9;
     }
 
     #layout {
@@ -709,47 +711,4 @@ a.pure-button-primary {
         left: 160px;
     }
 
-}
-
-.view-image, .view-image2, .view-image3 {
-    list-style: none;
-    padding: 0;
-    line-height: 0;
-}
-
-.view-image li, .view-image2 li, .view-image3 li {
-    position: relative;
-}
-
-.view-image li img, .view-image3 li img {
-    width: 100%;
-    box-shadow: 0 0 0 6px #fff;
-}
-
-.view-image2 {
-    margin: 2% 0;
-}
-
-.view-image2 li {
-    text-align: center;
-    line-height: 80px;
-    box-shadow: 0 0 0 1px #eee inset;
-}
-
-.view-image2 li:last-child {
-    background: #eee
-}
-
-.view-image li.imgfalse:before, .view-image2 li.imgfalse:before, .view-image3 li.imgfalse:before {
-    content: 'false';
-    position: absolute;
-    top: 0;
-    right: 0;
-    background: #f55;
-    width: 50px;
-    height: 24px;
-    line-height: 24px;
-    text-align: center;
-    font-size: 14px;
-    color: #fff;
 }
