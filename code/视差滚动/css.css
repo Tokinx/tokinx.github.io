@@ -1,0 +1,38 @@
+* {
+    box-sizing: border-box;
+    border: 0;
+    margin: 0;
+    padding: 0
+}
+.parallaxs,body,html {
+    height: 100%
+}
+
+.parallaxs,img {
+    width: 100%
+}
+
+
+.parallaxs {
+    overflow-x: hidden;
+    overflow-y: scroll;
+    position: relative;
+    perspective: 1px;
+    perspective-origin: left top;
+}
+.background {
+    position: relative;
+    z-index: -1;
+    background: url(//seaofficehome.msocdn.com/s/9b4a755b/images/hero-still-image-desktop.jpg);
+    background-size: cover;
+    transform: translateZ(-1px) scale(2);
+    transform-origin: left top;
+    height: 60%;
+}
+
+#main{
+    text-align: center;
+    padding: 2rem;
+    height: 1000px;
+    background: #fff;
+}
