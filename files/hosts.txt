@@ -1,0 +1,16 @@
+#192.168.20.230 voterregistration.hkadc.org.hk
+#192.168.20.230 admin.hkadc.org.hk
+#192.168.20.230 master.hkadc.org.hk
+#192.168.20.230 login.hkadc.org.hk
+#192.168.20.230 file.hkadc.org.hk
+192.168.21.200 admin-int-uat.hkadc.org.hk
+192.168.21.200 voterregistration-int-uat.hkadc.org.hk
+192.168.21.200 voter-int-uat.hkadc.org.hk
+192.168.21.200 master-int-uat.hkadc.org.hk
+192.168.21.200 login-int-uat.hkadc.org.hk
+192.168.21.200 file-int-uat.hkadc.org.hk
+192.168.20.233 master.hkadc.org.hk
+192.168.20.233 file.hkadc.org.hk
+192.168.20.233 login.hkadc.org.hk
+192.168.20.233 voterregistration.hkadc.org.hk
+192.168.20.233 admin.hkadc.org.hk
