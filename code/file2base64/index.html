@@ -17,10 +17,10 @@
         }
         function readFile() {
             var file = this.files[0];
-            alert(file.type);
+            alert(`type:${file.type}, size:${file.size}`);
             var reader = new FileReader();
             reader.onload = function (e) {
-                alert(this.result);
+                alert(`length:${this.result.length}, result:${this.result}`);
             }
             reader.readAsDataURL(file);
         }
