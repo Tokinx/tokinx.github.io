@@ -1,0 +1,113 @@
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <script type="text/javascript" src="https://cdn.rawgit.com/ricmoo/aes-js/e27b99df/index.js"></script>
+</head>
+
+<body style="padding: 0; margin: 4%;">
+    <div style="margin-bottom: 10px;">
+        <input id="key" type="key" placeholder="key" style="width: 300px;border: 1px solid #ddd;padding: 10px;" />
+        <input id="iv" type="iv" placeholder="iv" style="width: 300px;border: 1px solid #ddd;padding: 10px;" />
+        <button id="encode" type="button" onclick="encode()">加密</button>
+        <button id="decode" type="button" onclick="decode()">解密</button>
+    </div>
+    <div style="display: flex;gap: 10px;">
+        <textarea id="InputBox" placeholder="input"
+            style="border: 1px solid #ddd;width: 100%;height: 80vh;padding: 10px;"></textarea>
+        <textarea id="OutputBox" placeholder="output"
+            style="border: 1px solid #ddd;width: 100%;height: 80vh;padding: 10px;"></textarea>
+    </div>
+
+    <script>
+        document.querySelector("#key").value = localStorage.getItem("key") || "";
+        document.querySelector("#iv").value = localStorage.getItem("iv") || "";
+        document.querySelector("#InputBox").value = localStorage.getItem("InputBox") || "";
+
+        function encode() {
+            document.querySelector("#OutputBox").value = encrypt(document.querySelector("#InputBox").value);
+            saveInfo();
+        }
+        function decode() {
+            document.querySelector("#OutputBox").value = decrypt(document.querySelector("#InputBox").value);
+            saveInfo();
+        }
+        function saveInfo() {
+            if (document.querySelector("#key").value) {
+                localStorage.setItem("key", document.querySelector("#key").value);
+            }
+            if (document.querySelector("#iv").value) {
+                localStorage.setItem("iv", document.querySelector("#iv").value);
+            }
+            if (document.querySelector("#InputBox").value) {
+                localStorage.setItem("InputBox", document.querySelector("#InputBox").value);
+            }
+        }
+
+        function encrypt(text) {
+            // An example 128-bit key
+            var key = aesjs.utils.utf8.toBytes(document.querySelector("#key").value);
+
+            // The initialization vector (must be 16 bytes)
+            var iv = aesjs.utils.utf8.toBytes(document.querySelector("#iv").value);
+
+            var textBytes = aesjs.utils.utf8.toBytes(text);
+
+            var aesCbc = new aesjs.ModeOfOperation.cbc(key, iv);
+            var encryptedBytes = aesCbc.encrypt(textBytes);
+
+            // To print or store the binary data, you may convert it to hex
+            var encryptedHex = aesjs.utils.hex.fromBytes(encryptedBytes);
+
+            return encryptedHex;
+        }
+        function decrypt(text) {
+            // An example 128-bit key
+            var key = aesjs.utils.utf8.toBytes(document.querySelector("#key").value);
+
+            // The initialization vector (must be 16 bytes)
+            var iv = aesjs.utils.utf8.toBytes(document.querySelector("#iv").value);
+
+            // When ready to decrypt the hex string, convert it back to bytes
+            var encryptedBytes = aesjs.utils.hex.toBytes(text);
+
+            // The cipher-block chaining mode of operation maintains internal
+            // state, so to decrypt a new instance must be instantiated.
+            var aesCbc = new aesjs.ModeOfOperation.cbc(key, iv);
+            var decryptedBytes = aesCbc.decrypt(encryptedBytes);
+
+            // Convert our bytes back into text
+            var decryptedText = aesjs.utils.utf8.fromBytes(decryptedBytes);
+
+            // 移除前后空格和EOT、ETX、ETB、CR、LF、NUL、SOH、STX、SUB、VT、FF
+            decryptedText = decryptedText.replace(/[\x00-\x1F\x7F]/g, "");
+
+            const decryptedObj = JSON.parse(decryptedText);
+            console.log(decryptedObj);
+            // 递归 obj JSON.parse
+            const _deep = (obj) => JSON.parse(JSON.stringify(obj), (key, value) => {
+                if (typeof value === "string") {
+                    try {
+                        const _o = JSON.parse(value);
+                        if (typeof _o === "object") {
+                            return _deep(_o);
+                        }
+                        return _o;
+                    } catch (e) {
+                        return value;
+                    }
+                }
+                return value;
+            })
+            const obj2 = _deep(decryptedObj);
+
+            return JSON.stringify(obj2, null, 4);
+        }
+
+    </script>
+</body>
+
+</html>
