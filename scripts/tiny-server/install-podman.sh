@@ -7,9 +7,11 @@ USERNAME="${USERNAME:-docker_usr}"       # rootless 模式下的运行用户
 USER_UID="${USER_UID:-1000}"             # 该用户的 UID
 INSTALL_COMPOSE_V2="${INSTALL_COMPOSE_V2:-1}"
 INSTALL_COMPOSE_V1="${INSTALL_COMPOSE_V1:-0}"   # v1 已弃用，不建议开启
-SYMLINK_DOCKER_SOCK="${SYMLINK_DOCKER_SOCK:-1}" # 是否创建 /var/run/docker.sock 软链
+SYMLINK_DOCKER_SOCK="${SYMLINK_DOCKER_SOCK:-0}" # 是否创建 /var/run/docker.sock 软链
 ALLOW_LOW_PORTS="${ALLOW_LOW_PORTS:-0}"         # 是否放开 <1024 端口映射
-INTERACTIVE="${INTERACTIVE:-1}"                 # 交互式模式
+INTERACTIVE="${INTERACTIVE:-0}"                 # 交互式模式
+ENABLE_SWAP="${ENABLE_SWAP:-1}"                 # 是否创建/启用 Swap（默认开启）
+SWAP_SIZE_MB="${SWAP_SIZE_MB:-2048}"           # Swap 大小（MB），默认 2048=2G
 # ============================================
 
 log(){ echo -e "\033[1;32m[INFO]\033[0m $*"; }
@@ -66,6 +68,10 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   INSTALL_COMPOSE_V1="$(ask_bool "安装 docker-compose v1(不推荐)?" "$INSTALL_COMPOSE_V1")"
   SYMLINK_DOCKER_SOCK="$(ask_bool "创建 /var/run/docker.sock 软链?" "$SYMLINK_DOCKER_SOCK")"
   ALLOW_LOW_PORTS="$(ask_bool "允许 rootless 绑定 <1024 端口?" "$ALLOW_LOW_PORTS")"
+  ENABLE_SWAP="$(ask_bool "创建并启用 Swap?" "$ENABLE_SWAP")"
+  if [[ "$ENABLE_SWAP" == "1" ]]; then
+    SWAP_SIZE_MB="$(ask_value "Swap 大小(MB)" "$SWAP_SIZE_MB")"
+  fi
 
   echo "\n== 配置摘要 =="
   echo "安装模式: $MODE"
@@ -76,8 +82,59 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   echo "compose v1: $([[ "$INSTALL_COMPOSE_V1" == 1 ]] && echo 启用 || echo 关闭)"
   echo "docker.sock 软链: $([[ "$SYMLINK_DOCKER_SOCK" == 1 ]] && echo 启用 || echo 关闭)"
   echo "低端口映射: $([[ "$ALLOW_LOW_PORTS" == 1 ]] && echo 允许 || echo 禁止)"
+  echo "Swap: $([[ "$ENABLE_SWAP" == 1 ]] && echo 启用 || echo 关闭)，大小 ${SWAP_SIZE_MB}MB"
   read -r -p "确认开始安装? [Y/n] " _go || true
   _go="${_go:-y}"; [[ "${_go,,}" == y* ]] || die "用户取消。"
+fi
+
+# ========= 提前配置 Swap（在安装 Podman 之前） =========
+setup_swap(){
+  local size_mb="$1"
+  local swapfile="${SWAPFILE_PATH:-/swapfile}"
+  # 如果已有任何 swap，跳过
+  if swapon --show --noheadings 2>/dev/null | grep -q .; then
+    log "检测到已有 Swap，跳过创建。"
+    return 0
+  fi
+  # 所需工具检查
+  if ! command -v mkswap >/dev/null || ! command -v swapon >/dev/null; then
+    warn "系统缺少 mkswap/swapon，跳过配置 Swap。"
+    return 0
+  fi
+  log "正在创建 ${size_mb}MB Swap 文件：$swapfile ..."
+  set +e
+  fallocate -l "${size_mb}M" "$swapfile" 2>/dev/null
+  if [[ $? -ne 0 ]]; then
+    dd if=/dev/zero of="$swapfile" bs=1M count="$size_mb" status=progress 2>/dev/null
+  fi
+  local alloc_rc=$?
+  set -e
+  if [[ $alloc_rc -ne 0 ]]; then
+    warn "分配 Swap 文件失败，可能磁盘空间不足或文件系统不支持。"
+    return 0
+  fi
+  chmod 600 "$swapfile"
+  if ! mkswap "$swapfile" >/dev/null 2>&1; then
+    warn "mkswap 失败，清理并跳过。"
+    rm -f "$swapfile" || true
+    return 0
+  fi
+  if ! swapon "$swapfile" >/dev/null 2>&1; then
+    warn "启用 Swap 失败，清理并跳过。"
+    swapoff "$swapfile" 2>/dev/null || true
+    rm -f "$swapfile" || true
+    return 0
+  fi
+  if ! grep -qF "$swapfile none swap sw 0 0" /etc/fstab 2>/dev/null; then
+    echo "$swapfile none swap sw 0 0" >> /etc/fstab
+  fi
+  log "Swap 已启用：$(swapon --show --noheadings || true)"
+}
+
+if [[ "$ENABLE_SWAP" == "1" ]]; then
+  setup_swap "$SWAP_SIZE_MB"
+else
+  log "跳过 Swap 配置（ENABLE_SWAP=0）。"
 fi
 
 # 安装
@@ -263,6 +320,26 @@ if command -v docker-compose >/dev/null; then
   else
     docker-compose version || true
   fi
+fi
+
+# 重启 Podman 以使配置（如 registries.conf）生效
+if [[ "$(ps -p 1 -o comm= --no-headers)" == "systemd" ]] && command -v systemctl >/dev/null; then
+  if [[ "$MODE" == "rootless" ]]; then
+    log "重启用户级 Podman（socket/service）..."
+    sudo -u "$USERNAME" \
+      XDG_RUNTIME_DIR="/run/user/${USER_UID}" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${USER_UID}/bus" \
+      bash -lc 'systemctl --user restart podman 2>/dev/null || true; systemctl --user restart podman.socket 2>/dev/null || true'
+    # 回退方式（机器作用域）
+    systemctl --user -M "${USERNAME}@.host" restart podman 2>/dev/null || true
+    systemctl --user -M "${USERNAME}@.host" restart podman.socket 2>/dev/null || true
+  else
+    log "重启系统级 Podman（socket/service）..."
+    systemctl restart podman 2>/dev/null || true
+    systemctl restart podman.socket 2>/dev/null || true
+  fi
+else
+  warn "非 systemd 环境或 systemctl 不可用，跳过重启 Podman。"
 fi
 
 if [[ -n "$TARGET_SOCK" ]]; then
