@@ -14,6 +14,7 @@ ENABLE_SWAP="${ENABLE_SWAP:-1}"                 # 是否创建/启用 Swap（默
 SWAP_SIZE_MB="${SWAP_SIZE_MB:-2048}"           # Swap 大小（MB），默认 2048=2G
 INSTALL_COMMON_PKGS="${INSTALL_COMMON_PKGS:-1}" # 是否安装常用工具（curl vim gzip tar bash less htop net-tools unzip）
 DOCKER_SERVICE_SHIM="${DOCKER_SERVICE_SHIM:-1}" # 是否创建 docker.service 兼容层（映射到 podman.socket）
+DOCKER_CLI_HACKS="${DOCKER_CLI_HACKS:-1}"       # Docker CLI 兼容 hack：静默提示与 logs 参数重排
 # ============================================
 
 log(){ echo -e "\033[1;32m[INFO]\033[0m $*"; }
@@ -79,6 +80,8 @@ if [[ "$INTERACTIVE" == "1" ]]; then
 
   DOCKER_SERVICE_SHIM="$(ask_bool "创建 docker.service 兼容层(指向 podman.socket)?" "$DOCKER_SERVICE_SHIM")"
 
+  DOCKER_CLI_HACKS="$(ask_bool "启用 Docker CLI 兼容 hack（静默兼容提示、修复 logs 参数顺序）?" "$DOCKER_CLI_HACKS")"
+
   echo "\n== 配置摘要 =="
   echo "安装模式: $MODE"
   if [[ "$MODE" == "rootless" ]]; then
@@ -91,6 +94,7 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   echo "Swap: $([[ "$ENABLE_SWAP" == 1 ]] && echo 启用 || echo 关闭)，大小 ${SWAP_SIZE_MB}MB"
   echo "常用工具包: $([[ "$INSTALL_COMMON_PKGS" == 1 ]] && echo 启用 || echo 关闭)"
   echo "docker.service 兼容层: $([[ "$DOCKER_SERVICE_SHIM" == 1 ]] && echo 启用 || echo 关闭)"
+  echo "Docker CLI 兼容 hack: $([[ "$DOCKER_CLI_HACKS" == 1 ]] && echo 启用 || echo 关闭)"
   read -r -p "确认开始安装? [Y/n] " _go || true
   _go="${_go:-y}"; [[ "${_go,,}" == y* ]] || die "用户取消。"
 fi
@@ -174,6 +178,54 @@ apt-get install -y "${PKGS[@]}"
 # 确认 PID1 为 systemd
 if [[ "$(ps -p 1 -o comm= --no-headers)" != "systemd" ]]; then
   warn "当前系统 PID1 非 systemd，user@UID 与 --user 功能可能不可用。建议改用 MODE=root。"
+fi
+
+# Docker CLI 兼容 hack：静默兼容提示与 logs 参数顺序修复
+if [[ "$DOCKER_CLI_HACKS" == "1" ]]; then
+  install -d -m 0755 /etc/containers
+  : >/etc/containers/nodocker
+  install -d -m 0755 /usr/local/bin
+  cat >/usr/local/bin/docker <<'EOWRAP'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "${1:-}" == "logs" ]]; then
+  shift
+  flags=()
+  containers=()
+  with_val=(--tail -n --since --until)
+  needs_val=""
+  for arg in "$@"; do
+    if [[ -n "$needs_val" ]]; then
+      flags+=("$arg"); needs_val=""; continue
+    fi
+    if [[ "$arg" == --* ]]; then
+      if [[ "$arg" == *=* ]]; then
+        flags+=("$arg")
+      else
+        flags+=("$arg")
+        for w in "${with_val[@]}"; do
+          if [[ "$arg" == "$w" ]]; then needs_val=1; break; fi
+        done
+      fi
+      continue
+    fi
+    if [[ "$arg" == -n* && "$arg" != "-n" ]]; then
+      flags+=("$arg"); continue
+    fi
+    if [[ "$arg" == -* ]]; then
+      flags+=("$arg"); continue
+    fi
+    containers+=("$arg")
+  done
+  exec podman logs "${flags[@]}" "${containers[@]}"
+else
+  exec podman "$@"
+fi
+EOWRAP
+  chmod +x /usr/local/bin/docker
+  log "已启用 Docker CLI 兼容 hack：创建 /etc/containers/nodocker 与 /usr/local/bin/docker 包装器。"
+else
+  log "跳过 Docker CLI 兼容 hack（DOCKER_CLI_HACKS=0）。"
 fi
 
 TARGET_SOCK=""
