@@ -15,6 +15,11 @@ SWAP_SIZE_MB="${SWAP_SIZE_MB:-2048}"           # Swap 大小（MB），默认 20
 INSTALL_COMMON_PKGS="${INSTALL_COMMON_PKGS:-1}" # 是否安装常用工具（curl vim gzip tar bash less htop net-tools unzip）
 DOCKER_SERVICE_SHIM="${DOCKER_SERVICE_SHIM:-1}" # 是否创建 docker.service 兼容层（映射到 podman.socket）
 DOCKER_CLI_HACKS="${DOCKER_CLI_HACKS:-1}"       # Docker CLI 兼容 hack：静默提示与 logs 参数重排
+# Podman wrapper：剥离 Docker 专用但 Podman 不支持的参数（默认移除 --memory-swappiness）
+PODMAN_WRAPPER_STRIP="${PODMAN_WRAPPER_STRIP:-1}"
+# 以空格分隔的需要剥离的长选项名（仅名称，不含值），支持 --flag value 与 --flag=value 两种形式
+# 默认列表以常见 Docker-only 或在 Podman/CGroups v2 下无效的选项为主
+PODMAN_STRIP_FLAGS="${PODMAN_STRIP_FLAGS:---memory-swappiness --kernel-memory --cpu-rt-runtime --cpu-rt-period --device-read-bps --device-write-bps --device-read-iops --device-write-iops --oom-score-adj --init-path}"
 # ============================================
 
 log(){ echo -e "\033[1;32m[INFO]\033[0m $*"; }
@@ -82,6 +87,11 @@ if [[ "$INTERACTIVE" == "1" ]]; then
 
   DOCKER_CLI_HACKS="$(ask_bool "启用 Docker CLI 兼容 hack（静默兼容提示、修复 logs 参数顺序）?" "$DOCKER_CLI_HACKS")"
 
+  PODMAN_WRAPPER_STRIP="$(ask_bool "安装 Podman wrapper 以剥离不支持的参数（如 --memory-swappiness）?" "$PODMAN_WRAPPER_STRIP")"
+  if [[ "$PODMAN_WRAPPER_STRIP" == "1" ]]; then
+    PODMAN_STRIP_FLAGS="$(ask_value "需剥离的参数名（空格分隔）" "$PODMAN_STRIP_FLAGS")"
+  fi
+
   echo "\n== 配置摘要 =="
   echo "安装模式: $MODE"
   if [[ "$MODE" == "rootless" ]]; then
@@ -95,6 +105,7 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   echo "常用工具包: $([[ "$INSTALL_COMMON_PKGS" == 1 ]] && echo 启用 || echo 关闭)"
   echo "docker.service 兼容层: $([[ "$DOCKER_SERVICE_SHIM" == 1 ]] && echo 启用 || echo 关闭)"
   echo "Docker CLI 兼容 hack: $([[ "$DOCKER_CLI_HACKS" == 1 ]] && echo 启用 || echo 关闭)"
+  echo "Podman 参数剥离 wrapper: $([[ "$PODMAN_WRAPPER_STRIP" == 1 ]] && echo 启用 || echo 关闭)（剥离: $PODMAN_STRIP_FLAGS）"
   read -r -p "确认开始安装? [Y/n] " _go || true
   _go="${_go:-y}"; [[ "${_go,,}" == y* ]] || die "用户取消。"
 fi
@@ -188,13 +199,51 @@ if [[ "$DOCKER_CLI_HACKS" == "1" ]]; then
   cat >/usr/local/bin/docker <<'EOWRAP'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+
+# Strip unsupported Docker flags before delegating to Podman
+STRIP_FLAGS_DEFAULT=(--memory-swappiness --kernel-memory --cpu-rt-runtime --cpu-rt-period --device-read-bps --device-write-bps --device-read-iops --device-write-iops --oom-score-adj --init-path)
+if [[ -n "${PODMAN_STRIP_FLAGS:-}" ]]; then
+  # shellcheck disable=SC2206
+  STRIP_FLAGS=( ${PODMAN_STRIP_FLAGS} )
+else
+  STRIP_FLAGS=("${STRIP_FLAGS_DEFAULT[@]}")
+fi
+
+strip_args() {
+  local out=()
+  local skip_next=0
+  for arg in "$@"; do
+    if [[ "$skip_next" -eq 1 ]]; then
+      skip_next=0
+      continue
+    fi
+    local matched=0
+    for f in "${STRIP_FLAGS[@]}"; do
+      if [[ "$arg" == "$f" ]]; then
+        matched=1
+        skip_next=1
+        break
+      fi
+      if [[ "$arg" == "$f"=* ]]; then
+        matched=1
+        break
+      fi
+    done
+    [[ "$matched" -eq 1 ]] && continue
+    out+=("$arg")
+  done
+  printf '%s\n' "${out[@]}"
+}
+
 if [[ "${1:-}" == "logs" ]]; then
   shift
+  # Clean unsupported flags first (usually none for logs, but consistent)
+  mapfile -t _cleaned < <(strip_args "$@")
   flags=()
   containers=()
   with_val=(--tail -n --since --until)
   needs_val=""
-  for arg in "$@"; do
+  for arg in "${_cleaned[@]}"; do
     if [[ -n "$needs_val" ]]; then
       flags+=("$arg"); needs_val=""; continue
     fi
@@ -219,16 +268,77 @@ if [[ "${1:-}" == "logs" ]]; then
   done
   exec podman logs "${flags[@]}" "${containers[@]}"
 else
-  exec podman "$@"
+  mapfile -t _cleaned < <(strip_args "$@")
+  exec podman "${_cleaned[@]}"
 fi
 EOWRAP
   chmod +x /usr/local/bin/docker
   log "已启用 Docker CLI 兼容 hack：创建 /etc/containers/nodocker 与 /usr/local/bin/docker 包装器。"
+  else
+    log "跳过 Docker CLI 兼容 hack（DOCKER_CLI_HACKS=0）。"
+  fi
+
+  # Podman wrapper：剥离 Docker 专用但 Podman 不支持的参数（默认移除 --memory-swappiness）
+  if [[ "$PODMAN_WRAPPER_STRIP" == "1" ]]; then
+    install -d -m 0755 /usr/local/bin
+    ts="$(date +%Y%m%d%H%M%S)"
+    if [[ -e /usr/local/bin/podman && ! -L /usr/local/bin/podman ]]; then
+      cp -f /usr/local/bin/podman "/usr/local/bin/podman.bak-${ts}" 2>/dev/null || true
+    fi
+    cat >/usr/local/bin/podman <<'EOWRAP'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Wrapper to strip unsupported Docker flags for Podman
+# Default list covers common Docker-only/unsupported flags; extend via env PODMAN_STRIP_FLAGS
+STRIP_FLAGS_DEFAULT=(--memory-swappiness --kernel-memory --cpu-rt-runtime --cpu-rt-period --device-read-bps --device-write-bps --device-read-iops --device-write-iops --oom-score-adj --init-path)
+
+# If PODMAN_STRIP_FLAGS is set, use it; otherwise use default
+if [[ -n "${PODMAN_STRIP_FLAGS:-}" ]]; then
+  # shellcheck disable=SC2206
+  STRIP_FLAGS=( ${PODMAN_STRIP_FLAGS} )
 else
-  log "跳过 Docker CLI 兼容 hack（DOCKER_CLI_HACKS=0）。"
+  STRIP_FLAGS=("${STRIP_FLAGS_DEFAULT[@]}")
 fi
 
-TARGET_SOCK=""
+args=()
+skip_next=0
+for arg in "$@"; do
+  if [[ "$skip_next" -eq 1 ]]; then
+    skip_next=0
+    continue
+  fi
+
+  stripped=0
+  for f in "${STRIP_FLAGS[@]}"; do
+    # Match --flag and remove following value
+    if [[ "$arg" == "$f" ]]; then
+      stripped=1
+      skip_next=1
+      break
+    fi
+    # Match --flag=value form and drop
+    if [[ "$arg" == "$f"=* ]]; then
+      stripped=1
+      break
+    fi
+  done
+  if [[ "$stripped" -eq 1 ]]; then
+    continue
+  fi
+
+  args+=("$arg")
+done
+
+exec /usr/bin/podman "${args[@]}"
+EOWRAP
+    chmod +x /usr/local/bin/podman
+    log "已安装 Podman wrapper：剥离参数 ${PODMAN_STRIP_FLAGS}（可通过 PODMAN_STRIP_FLAGS 调整）。"
+  else
+    log "跳过 Podman wrapper（PODMAN_WRAPPER_STRIP=0）。"
+  fi
+
+  TARGET_SOCK=""
 if [[ "$MODE" == "rootless" ]]; then
   # 用户
   log "校验/创建用户：$USERNAME（期望 UID=$USER_UID）..."
