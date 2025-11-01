@@ -12,6 +12,7 @@ ALLOW_LOW_PORTS="${ALLOW_LOW_PORTS:-0}"         # 是否放开 <1024 端口映�
 INTERACTIVE="${INTERACTIVE:-0}"                 # 交互式模式
 ENABLE_SWAP="${ENABLE_SWAP:-1}"                 # 是否创建/启用 Swap（默认开启）
 SWAP_SIZE_MB="${SWAP_SIZE_MB:-2048}"           # Swap 大小（MB），默认 2048=2G
+INSTALL_COMMON_PKGS="${INSTALL_COMMON_PKGS:-1}" # 是否安装常用工具（curl vim gzip tar bash less htop net-tools unzip）
 # ============================================
 
 log(){ echo -e "\033[1;32m[INFO]\033[0m $*"; }
@@ -73,6 +74,8 @@ if [[ "$INTERACTIVE" == "1" ]]; then
     SWAP_SIZE_MB="$(ask_value "Swap 大小(MB)" "$SWAP_SIZE_MB")"
   fi
 
+  INSTALL_COMMON_PKGS="$(ask_bool "安装常用工具包(curl vim gzip tar bash less htop net-tools unzip)?" "$INSTALL_COMMON_PKGS")"
+
   echo "\n== 配置摘要 =="
   echo "安装模式: $MODE"
   if [[ "$MODE" == "rootless" ]]; then
@@ -83,6 +86,7 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   echo "docker.sock 软链: $([[ "$SYMLINK_DOCKER_SOCK" == 1 ]] && echo 启用 || echo 关闭)"
   echo "低端口映射: $([[ "$ALLOW_LOW_PORTS" == 1 ]] && echo 允许 || echo 禁止)"
   echo "Swap: $([[ "$ENABLE_SWAP" == 1 ]] && echo 启用 || echo 关闭)，大小 ${SWAP_SIZE_MB}MB"
+  echo "常用工具包: $([[ "$INSTALL_COMMON_PKGS" == 1 ]] && echo 启用 || echo 关闭)"
   read -r -p "确认开始安装? [Y/n] " _go || true
   _go="${_go:-y}"; [[ "${_go,,}" == y* ]] || die "用户取消。"
 fi
@@ -155,6 +159,9 @@ fi
 # 组装安装包列表
 PKGS=(podman podman-docker uidmap slirp4netns fuse-overlayfs \
   dbus-user-session curl wget ca-certificates jq sudo)
+if [[ "$INSTALL_COMMON_PKGS" == "1" ]]; then
+  PKGS+=(curl vim gzip tar bash less htop net-tools unzip)
+fi
 if [[ -n "$LOGIND_PKG" ]]; then
   PKGS+=("$LOGIND_PKG")
 fi
@@ -274,6 +281,29 @@ cat >/etc/containers/registries.conf <<'EOF'
 [registries.search]
 registries = ['docker.io']
 EOF
+
+# 为 Netavark 后端开启默认网络 DNS 解析
+# 说明：部分环境下新建容器出现域名无法解析的问题，需为默认网络开启 dns_enabled
+# 仅在 NetworkBackend=netavark 且存在默认网络 'podman' 时执行
+NET_BACKEND="$(podman info --format '{{.Host.NetworkBackend}}' 2>/dev/null || true)"
+if [[ "${NET_BACKEND,,}" == "netavark" ]]; then
+  log "检测到 NetworkBackend=netavark，设置默认网络 dns_enabled=true..."
+  install -d -m 0755 /etc/containers/networks
+  if podman network inspect podman >/dev/null 2>&1; then
+    ts="$(date +%Y%m%d%H%M%S)"
+    if [[ -f /etc/containers/networks/podman.json ]]; then
+      cp -f /etc/containers/networks/podman.json "/etc/containers/networks/podman.json.bak-${ts}" || true
+    fi
+    # 以当前网络配置为基准，打开 dns_enabled
+    podman network inspect podman \
+      | jq '.[] | .dns_enabled = true' \
+      > /etc/containers/networks/podman.json
+  else
+    warn "未找到默认网络 'podman'，跳过 dns_enabled 配置。"
+  fi
+else
+  log "NetworkBackend=${NET_BACKEND:-unknown}（非 netavark），跳过 dns_enabled 配置。"
+fi
 
 # 可选软链
 if [[ "$SYMLINK_DOCKER_SOCK" == "1" ]]; then
