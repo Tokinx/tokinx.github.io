@@ -24,6 +24,10 @@ PODMAN_STRIP_FLAGS="${PODMAN_STRIP_FLAGS:---memory-swappiness --kernel-memory --
 DOCKER_ABS_PATH_DIVERT="${DOCKER_ABS_PATH_DIVERT:-1}"
 # 在 /var/run/docker.sock 上部署 API 过滤代理，剥离 Docker API 请求中的不支持字段
 DOCKER_API_FILTER_PROXY="${DOCKER_API_FILTER_PROXY:-1}"
+# 是否自动为容器生成并启用 systemd 单元（安装时对现有容器；运行时由代理对新容器）
+AUTOGEN_SYSTEMD_UNITS="${AUTOGEN_SYSTEMD_UNITS:-1}"
+# 仅对这些重启策略的容器生成单元（空格分隔）
+AUTOGEN_MATCH_POLICY="${AUTOGEN_MATCH_POLICY:-always unless-stopped}"
 # ============================================
 
 log(){ echo -e "\033[1;32m[INFO]\033[0m $*"; }
@@ -98,6 +102,10 @@ if [[ "$INTERACTIVE" == "1" ]]; then
 
   DOCKER_ABS_PATH_DIVERT="$(ask_bool "拦截绝对路径 /usr/bin/docker（dpkg-divert）?" "$DOCKER_ABS_PATH_DIVERT")"
   DOCKER_API_FILTER_PROXY="$(ask_bool "在 /var/run/docker.sock 部署 API 过滤代理?" "$DOCKER_API_FILTER_PROXY")"
+  AUTOGEN_SYSTEMD_UNITS="$(ask_bool "自动为容器生成并启用 systemd 单元?" "$AUTOGEN_SYSTEMD_UNITS")"
+  if [[ "$AUTOGEN_SYSTEMD_UNITS" == "1" ]]; then
+    AUTOGEN_MATCH_POLICY="$(ask_value "匹配重启策略（空格分隔）" "$AUTOGEN_MATCH_POLICY")"
+  fi
 
   echo "\n== 配置摘要 =="
   echo "安装模式: $MODE"
@@ -115,6 +123,7 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   echo "Podman 参数剥离 wrapper: $([[ "$PODMAN_WRAPPER_STRIP" == 1 ]] && echo 启用 || echo 关闭)（剥离: $PODMAN_STRIP_FLAGS）"
   echo "拦截 /usr/bin/docker: $([[ "$DOCKER_ABS_PATH_DIVERT" == 1 ]] && echo 启用 || echo 关闭)"
   echo "Docker API 过滤代理: $([[ "$DOCKER_API_FILTER_PROXY" == 1 ]] && echo 启用 || echo 关闭)"
+  echo "自动生成 systemd 单元: $([[ "$AUTOGEN_SYSTEMD_UNITS" == 1 ]] && echo 启用 || echo 关闭)（策略: $AUTOGEN_MATCH_POLICY）"
   read -r -p "确认开始安装? [Y/n] " _go || true
   _go="${_go:-y}"; [[ "${_go,,}" == y* ]] || die "用户取消。"
 fi
@@ -334,12 +343,12 @@ EOF
   else
     log "跳过 /usr/bin/docker divert（DOCKER_ABS_PATH_DIVERT=0）。"
   fi
-  else
-    log "跳过 Docker CLI 兼容 hack（DOCKER_CLI_HACKS=0）。"
-  fi
+else
+  log "跳过 Docker CLI 兼容 hack（DOCKER_CLI_HACKS=0）。"
+fi
 
-  # Podman wrapper：剥离 Docker 专用但 Podman 不支持的参数（默认移除 --memory-swappiness）
-  if [[ "$PODMAN_WRAPPER_STRIP" == "1" ]]; then
+# Podman wrapper：剥离 Docker 专用但 Podman 不支持的参数（默认移除 --memory-swappiness）
+if [[ "$PODMAN_WRAPPER_STRIP" == "1" ]]; then
     install -d -m 0755 /usr/local/bin
     ts="$(date +%Y%m%d%H%M%S)"
     if [[ -e /usr/local/bin/podman && ! -L /usr/local/bin/podman ]]; then
@@ -398,7 +407,7 @@ EOWRAP
     log "跳过 Podman wrapper（PODMAN_WRAPPER_STRIP=0）。"
   fi
 
-  TARGET_SOCK=""
+TARGET_SOCK=""
 if [[ "$MODE" == "rootless" ]]; then
   # 用户
   log "校验/创建用户：$USERNAME（期望 UID=$USER_UID）..."
@@ -493,6 +502,55 @@ else
   else
     TARGET_SOCK=""  # 不设置 DOCKER_HOST，避免误导
   fi
+fi
+
+# 安装时为现有容器自动生成并启用 systemd 单元（可选）
+if [[ "$AUTOGEN_SYSTEMD_UNITS" == "1" ]]; then
+  log "为现有容器生成并启用 systemd 单元（策略匹配：$AUTOGEN_MATCH_POLICY）..."
+  gen_for_list(){
+    local list_cmd="$1"; local mode="$2"; local user="$3"; local uid="$4";
+    local names
+    names=$(bash -lc "$list_cmd" 2>/dev/null || true)
+    [[ -n "$names" ]] || return 0
+    for c in $names; do
+      local pol
+      if [[ "$mode" == "rootless" ]]; then
+        pol=$(sudo -u "$user" XDG_RUNTIME_DIR="/run/user/${uid}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus" podman inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$c" 2>/dev/null || true)
+      else
+        pol=$(podman inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$c" 2>/dev/null || true)
+      fi
+      for want in $AUTOGEN_MATCH_POLICY; do
+        if [[ "$pol" == "$want" ]]; then
+          if [[ "$mode" == "rootless" ]]; then
+            sudo -u "$user" XDG_RUNTIME_DIR="/run/user/${uid}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus" podman generate systemd --new --name "$c" --files --restart-policy=always >/dev/null 2>&1 || true
+            if [[ -f "container-$c.service" ]]; then
+              install -D -m 0644 "container-$c.service" "/home/$user/.config/systemd/user/container-$c.service"
+              chown "$user:$user" "/home/$user/.config/systemd/user/container-$c.service"
+              rm -f "container-$c.service"
+              sudo -u "$user" systemctl --user daemon-reload || true
+              sudo -u "$user" systemctl --user enable --now "container-$c.service" || true
+            fi
+          else
+            podman generate systemd --new --name "$c" --files --restart-policy=always >/dev/null 2>&1 || true
+            if [[ -f "container-$c.service" ]]; then
+              install -D -m 0644 "container-$c.service" "/etc/systemd/system/container-$c.service"
+              rm -f "container-$c.service"
+              systemctl daemon-reload || true
+              systemctl enable --now "container-$c.service" || true
+            fi
+          fi
+          break
+        fi
+      done
+    done
+  }
+  if [[ "$MODE" == "rootless" ]]; then
+    gen_for_list "sudo -u $USERNAME podman ps -a --format '{{.Names}}'" "rootless" "$USERNAME" "$USER_UID"
+  else
+    gen_for_list "podman ps -a --format '{{.Names}}'" "root" "" ""
+  fi
+else
+  log "跳过现有容器 systemd 单元生成（AUTOGEN_SYSTEMD_UNITS=0）。"
 fi
 
 # ========== systemd docker.service 兼容层（可选） ==========
@@ -665,10 +723,15 @@ if [[ "$DOCKER_API_FILTER_PROXY" == "1" ]]; then
     install -d -m 0755 /usr/local/lib
     cat >/usr/local/lib/podman-docker-filter-proxy.py <<'PY'
 #!/usr/bin/env python3
-import os, sys, socket, threading, json, re, grp
+import os, sys, socket, threading, json, re, grp, subprocess, urllib.parse, tempfile, shutil
 
 UPSTREAM = os.environ.get('UPSTREAM_SOCK', '')
 LISTEN = '/var/run/docker.sock'
+MODE = os.environ.get('PODMAN_MODE', 'root')
+USERNAME = os.environ.get('PODMAN_USER', '')
+USER_UID = os.environ.get('USER_UID', '')
+AUTO_UNIT = os.environ.get('AUTO_UNIT', '1') == '1'
+PROXY_LOG = os.environ.get('PROXY_LOG', '0') == '1'
 
 STRIP_CREATE = {
     'HostConfig': [
@@ -771,13 +834,68 @@ def forward(reqline, headers, body):
     s.connect(UPSTREAM)
     s.sendall(out)
     # stream back
-    resp = b''
+    chunks = []
     while True:
         chunk = s.recv(8192)
         if not chunk: break
-        resp += chunk
+        chunks.append(chunk)
     s.close()
-    return resp
+    return b''.join(chunks)
+
+def _run(cmd, env=None):
+    try:
+        if PROXY_LOG:
+            sys.stderr.write('[proxy] run: %s\n' % ' '.join(cmd))
+        subprocess.run(cmd, check=True, env=env)
+    except Exception as e:
+        if PROXY_LOG:
+            sys.stderr.write('[proxy] cmd failed: %s\n' % e)
+
+def _inspect_name_root(cid):
+    out = subprocess.check_output(['/usr/bin/podman','inspect','--format','{{.Name}}',cid])
+    return out.decode().strip().lstrip('/')
+
+def _inspect_name_user(cid, username, uid):
+    env = os.environ.copy()
+    env.update({
+        'XDG_RUNTIME_DIR': f'/run/user/{uid}',
+        'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{uid}/bus'
+    })
+    out = subprocess.check_output(['sudo','-u',username,'/usr/bin/podman','inspect','--format','{{.Name}}',cid], env=env)
+    return out.decode().strip().lstrip('/')
+
+def autounit_async(cid, name_hint=None):
+    def worker():
+        try:
+            if MODE == 'rootless' and USERNAME and USER_UID:
+                uid = USER_UID
+                name = name_hint or _inspect_name_user(cid, USERNAME, uid)
+                tmpd = tempfile.mkdtemp(prefix='podman-autounit-')
+                envu = {
+                    'XDG_RUNTIME_DIR': f'/run/user/{uid}',
+                    'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{uid}/bus'
+                }
+                _run(['sudo','-u',USERNAME,'/usr/bin/podman','generate','systemd','--new','--name',name,'--files','--restart-policy=always'], env=envu)
+                svc_cand = f'container-{name}.service'
+                # move to user systemd dir
+                outdir = f'/home/{USERNAME}/.config/systemd/user'
+                os.makedirs(outdir, exist_ok=True)
+                if os.path.exists(svc_cand):
+                    shutil.move(svc_cand, os.path.join(outdir, svc_cand))
+                _run(['sudo','-u',USERNAME,'systemctl','--user','daemon-reload'])
+                _run(['sudo','-u',USERNAME,'systemctl','--user','enable','--now',svc_cand])
+            else:
+                name = name_hint or _inspect_name_root(cid)
+                _run(['/usr/bin/podman','generate','systemd','--new','--name',name,'--files','--restart-policy=always'])
+                svc_cand = f'container-{name}.service'
+                if os.path.exists(svc_cand):
+                    shutil.move(svc_cand, os.path.join('/etc/systemd/system', svc_cand))
+                _run(['systemctl','daemon-reload'])
+                _run(['systemctl','enable','--now',svc_cand])
+        except Exception as e:
+            if PROXY_LOG:
+                sys.stderr.write('[proxy] autounit failed: %s\n' % e)
+    threading.Thread(target=worker, daemon=True).start()
 
 def handle(c):
     try:
@@ -792,6 +910,22 @@ def handle(c):
         if method in ('POST','PUT','PATCH'):
             body = rewrite(path, body)
         resp = forward(reqline, headers, body)
+        # autounit on successful create
+        if AUTO_UNIT and method == 'POST' and re.search(r"/containers/create(?=$|\?)", path):
+            try:
+                head, _, tail = resp.partition(b"\r\n\r\n")
+                status = head.split(b"\r\n",1)[0]
+                if b" 201 " in status:
+                    j = json.loads(tail.decode('utf-8'))
+                    cid = j.get('Id') or j.get('id')
+                    parsed = urllib.parse.urlparse(path)
+                    q = urllib.parse.parse_qs(parsed.query or '')
+                    name_hint = q.get('name',[None])[0]
+                    if cid:
+                        autounit_async(cid, name_hint)
+            except Exception as e:
+                if PROXY_LOG:
+                    sys.stderr.write('[proxy] parse create resp failed: %s\n' % e)
         c.sendall(resp)
     except Exception as e:
         try:
@@ -836,6 +970,10 @@ Wants=podman.socket
 [Service]
 Type=simple
 Environment=UPSTREAM_SOCK=$TARGET_SOCK
+Environment=PODMAN_MODE=$MODE
+Environment=PODMAN_USER=$USERNAME
+Environment=USER_UID=$USER_UID
+Environment=AUTO_UNIT=$AUTOGEN_SYSTEMD_UNITS
 ExecStart=/usr/bin/python3 -u /usr/local/lib/podman-docker-filter-proxy.py
 Restart=always
 
