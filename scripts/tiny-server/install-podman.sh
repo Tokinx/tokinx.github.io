@@ -20,6 +20,10 @@ PODMAN_WRAPPER_STRIP="${PODMAN_WRAPPER_STRIP:-1}"
 # 以空格分隔的需要剥离的长选项名（仅名称，不含值），支持 --flag value 与 --flag=value 两种形式
 # 默认列表以常见 Docker-only 或在 Podman/CGroups v2 下无效的选项为主
 PODMAN_STRIP_FLAGS="${PODMAN_STRIP_FLAGS:---memory-swappiness --kernel-memory --cpu-rt-runtime --cpu-rt-period --device-read-bps --device-write-bps --device-read-iops --device-write-iops --oom-score-adj --init-path}"
+# 拦截绝对路径 /usr/bin/docker（dpkg-divert）以强制走 wrapper
+DOCKER_ABS_PATH_DIVERT="${DOCKER_ABS_PATH_DIVERT:-1}"
+# 在 /var/run/docker.sock 上部署 API 过滤代理，剥离 Docker API 请求中的不支持字段
+DOCKER_API_FILTER_PROXY="${DOCKER_API_FILTER_PROXY:-1}"
 # ============================================
 
 log(){ echo -e "\033[1;32m[INFO]\033[0m $*"; }
@@ -92,6 +96,9 @@ if [[ "$INTERACTIVE" == "1" ]]; then
     PODMAN_STRIP_FLAGS="$(ask_value "需剥离的参数名（空格分隔）" "$PODMAN_STRIP_FLAGS")"
   fi
 
+  DOCKER_ABS_PATH_DIVERT="$(ask_bool "拦截绝对路径 /usr/bin/docker（dpkg-divert）?" "$DOCKER_ABS_PATH_DIVERT")"
+  DOCKER_API_FILTER_PROXY="$(ask_bool "在 /var/run/docker.sock 部署 API 过滤代理?" "$DOCKER_API_FILTER_PROXY")"
+
   echo "\n== 配置摘要 =="
   echo "安装模式: $MODE"
   if [[ "$MODE" == "rootless" ]]; then
@@ -106,6 +113,8 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   echo "docker.service 兼容层: $([[ "$DOCKER_SERVICE_SHIM" == 1 ]] && echo 启用 || echo 关闭)"
   echo "Docker CLI 兼容 hack: $([[ "$DOCKER_CLI_HACKS" == 1 ]] && echo 启用 || echo 关闭)"
   echo "Podman 参数剥离 wrapper: $([[ "$PODMAN_WRAPPER_STRIP" == 1 ]] && echo 启用 || echo 关闭)（剥离: $PODMAN_STRIP_FLAGS）"
+  echo "拦截 /usr/bin/docker: $([[ "$DOCKER_ABS_PATH_DIVERT" == 1 ]] && echo 启用 || echo 关闭)"
+  echo "Docker API 过滤代理: $([[ "$DOCKER_API_FILTER_PROXY" == 1 ]] && echo 启用 || echo 关闭)"
   read -r -p "确认开始安装? [Y/n] " _go || true
   _go="${_go:-y}"; [[ "${_go,,}" == y* ]] || die "用户取消。"
 fi
@@ -177,7 +186,7 @@ fi
 
 # 组装安装包列表
 PKGS=(podman podman-docker uidmap slirp4netns fuse-overlayfs \
-  dbus-user-session curl wget ca-certificates jq sudo)
+  dbus-user-session curl wget ca-certificates jq sudo python3)
 if [[ "$INSTALL_COMMON_PKGS" == "1" ]]; then
   PKGS+=(curl vim gzip tar bash less htop net-tools unzip)
 fi
@@ -274,6 +283,57 @@ fi
 EOWRAP
   chmod +x /usr/local/bin/docker
   log "已启用 Docker CLI 兼容 hack：创建 /etc/containers/nodocker 与 /usr/local/bin/docker 包装器。"
+
+  # 可选：拦截绝对路径 /usr/bin/docker 调用（dpkg-divert）
+  if [[ "$DOCKER_ABS_PATH_DIVERT" == "1" ]]; then
+    if ! dpkg-divert --list /usr/bin/docker 2>/dev/null | grep -q 'docker\.distrib'; then
+      if dpkg-divert --local --rename --add /usr/bin/docker; then
+        ln -sf /usr/local/bin/docker /usr/bin/docker
+        log "已启用 dpkg-divert: /usr/bin/docker -> /usr/local/bin/docker"
+      else
+        warn "dpkg-divert /usr/bin/docker 失败，可能已被其它软件占用。"
+      fi
+    else
+      ln -sf /usr/local/bin/docker /usr/bin/docker || true
+      log "检测到已存在 divert，已更新 /usr/bin/docker -> /usr/local/bin/docker"
+    fi
+
+    # 安装自动清理：若未来安装真实 Docker（/usr/bin/dockerd 存在），撤销 divert
+    cat >/usr/local/sbin/podman-docker-divert-cleanup.sh <<'EOSH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ -x /usr/bin/dockerd ]]; then
+  if dpkg-divert --list /usr/bin/docker 2>/dev/null | grep -q 'local'; then
+    dpkg-divert --rename --remove /usr/bin/docker || true
+  fi
+fi
+exit 0
+EOSH
+    chmod +x /usr/local/sbin/podman-docker-divert-cleanup.sh
+    cat >/etc/systemd/system/podman-docker-divert-cleanup.service <<'EOF'
+[Unit]
+Description=Cleanup docker divert when real Docker is installed
+ConditionPathExists=/usr/bin/dockerd
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/podman-docker-divert-cleanup.sh
+EOF
+    cat >/etc/systemd/system/podman-docker-divert-cleanup.path <<'EOF'
+[Unit]
+Description=Watch for /usr/bin/dockerd to cleanup docker divert
+
+[Path]
+PathExists=/usr/bin/dockerd
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload || true
+    systemctl enable --now podman-docker-divert-cleanup.path || true
+  else
+    log "跳过 /usr/bin/docker divert（DOCKER_ABS_PATH_DIVERT=0）。"
+  fi
   else
     log "跳过 Docker CLI 兼容 hack（DOCKER_CLI_HACKS=0）。"
   fi
@@ -596,17 +656,209 @@ else
   log "NetworkBackend=${NET_BACKEND:-unknown}（非 netavark），跳过 dns_enabled 配置。"
 fi
 
-# 可选软链
-if [[ "$SYMLINK_DOCKER_SOCK" == "1" ]]; then
-  log "创建 /var/run/docker.sock -> $TARGET_SOCK 软链..."
-  install -d -m 0775 /var/run
-  if [[ -n "$TARGET_SOCK" ]]; then
-    [[ -e /var/run/docker.sock && ! -L /var/run/docker.sock ]] || ln -sfn "$TARGET_SOCK" /var/run/docker.sock
+# Docker API 过滤代理或软链
+if [[ "$DOCKER_API_FILTER_PROXY" == "1" ]]; then
+  if [[ -z "$TARGET_SOCK" ]]; then
+    warn "无有效的 Podman socket，跳过 API 过滤代理部署。"
   else
-    warn "无有效的 Podman socket，跳过 docker.sock 软链创建。"
+    log "部署 Docker API 过滤代理：/var/run/docker.sock -> $TARGET_SOCK（剥离 MemorySwappiness 等不支持字段）..."
+    install -d -m 0755 /usr/local/lib
+    cat >/usr/local/lib/podman-docker-filter-proxy.py <<'PY'
+#!/usr/bin/env python3
+import os, sys, socket, threading, json, re, grp
+
+UPSTREAM = os.environ.get('UPSTREAM_SOCK', '')
+LISTEN = '/var/run/docker.sock'
+
+STRIP_CREATE = {
+    'HostConfig': [
+        'MemorySwappiness','KernelMemory','CpuRealtimeRuntime','CpuRealtimePeriod',
+        'BlkioDeviceReadBps','BlkioDeviceWriteBps','BlkioDeviceReadIOps','BlkioDeviceWriteIOps',
+        'OomScoreAdj','InitPath'
+    ]
+}
+STRIP_UPDATE = [
+    'MemorySwappiness','KernelMemory','CpuRealtimeRuntime','CpuRealtimePeriod',
+    'BlkioDeviceReadBps','BlkioDeviceWriteBps','BlkioDeviceReadIOps','BlkioDeviceWriteIOps'
+]
+
+def read_headers(conn):
+    data = b''
+    while b"\r\n\r\n" not in data:
+        chunk = conn.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    head, _, rest = data.partition(b"\r\n\r\n")
+    lines = head.split(b"\r\n")
+    request = lines[0].decode('latin-1') if lines else ''
+    headers = {}
+    for line in lines[1:]:
+        if b":" in line:
+            k,v = line.split(b":",1)
+            headers[k.strip().lower()] = v.strip()
+    return request, headers, rest
+
+def read_body(conn, headers, buf):
+    body = buf
+    te = headers.get(b'transfer-encoding')
+    if te and b'chunked' in te:
+        # naive chunked reader
+        while True:
+            line = b''
+            while not line.endswith(b'\r\n'):
+                c = conn.recv(1)
+                if not c: break
+                line += c
+            size = int(line.strip().split(b';')[0], 16)
+            if size == 0:
+                # read trailer CRLF
+                _ = conn.recv(2)
+                break
+            chunk = b''
+            while len(chunk) < size:
+                chunk += conn.recv(size - len(chunk))
+            body += chunk
+            _ = conn.recv(2)  # CRLF
+    else:
+        cl = headers.get(b'content-length')
+        if cl:
+            need = int(cl)
+            while len(body) < need:
+                more = conn.recv(need - len(body))
+                if not more: break
+                body += more
+    return body
+
+def rewrite(path, body):
+    try:
+        obj = json.loads(body.decode('utf-8') or 'null')
+    except Exception:
+        return body
+    changed = False
+    if obj is None:
+        return body
+    if re.search(r"/containers/create(?=$|\?)", path):
+        hc = obj.get('HostConfig')
+        if isinstance(hc, dict):
+            for k in STRIP_CREATE['HostConfig']:
+                if k in hc:
+                    hc.pop(k, None); changed = True
+    elif re.search(r"/containers/[^/]+/update(?=$|\?)", path):
+        if isinstance(obj, dict):
+            for k in STRIP_UPDATE:
+                if k in obj:
+                    obj.pop(k, None); changed = True
+    if changed:
+        return json.dumps(obj, separators=(',',':')).encode('utf-8')
+    return body
+
+def forward(reqline, headers, body):
+    # build request to upstream
+    m, p, v = reqline.split(' ', 2)
+    # remove TE, set CL
+    headers.pop(b'transfer-encoding', None)
+    headers[b'content-length'] = str(len(body)).encode('ascii')
+    # ensure connection close
+    headers[b'connection'] = b'close'
+    # compose raw request
+    out = (f"{m} {p} {v}\r\n").encode('latin-1')
+    for k, v in headers.items():
+        out += k + b": " + v + b"\r\n"
+    out += b"\r\n" + body
+    # send to upstream unix socket
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(UPSTREAM)
+    s.sendall(out)
+    # stream back
+    resp = b''
+    while True:
+        chunk = s.recv(8192)
+        if not chunk: break
+        resp += chunk
+    s.close()
+    return resp
+
+def handle(c):
+    try:
+        reqline, headers, rest = read_headers(c)
+        if not reqline:
+            c.close(); return
+        parts = reqline.split(' ')
+        method = parts[0]
+        path = parts[1] if len(parts) > 1 else '/'
+        body = read_body(c, headers, rest)
+        # only rewrite for create/update
+        if method in ('POST','PUT','PATCH'):
+            body = rewrite(path, body)
+        resp = forward(reqline, headers, body)
+        c.sendall(resp)
+    except Exception as e:
+        try:
+            msg = ("HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: 21\r\n\r\nproxy error: failed").encode('latin-1')
+            c.sendall(msg)
+        except Exception:
+            pass
+    finally:
+        try: c.close()
+        except Exception: pass
+
+def main():
+    if not UPSTREAM:
+        sys.stderr.write('UPSTREAM_SOCK not set\n'); sys.exit(1)
+    # cleanup any existing sock
+    try: os.unlink(LISTEN)
+    except FileNotFoundError: pass
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.bind(LISTEN)
+    try:
+        gid = grp.getgrnam('docker').gr_gid
+        os.chmod(LISTEN, 0o660)
+        os.chown(LISTEN, 0, gid)
+    except Exception:
+        os.chmod(LISTEN, 0o660)
+    s.listen(64)
+    while True:
+        c,_ = s.accept()
+        threading.Thread(target=handle, args=(c,), daemon=True).start()
+
+if __name__ == '__main__':
+    main()
+PY
+    chmod +x /usr/local/lib/podman-docker-filter-proxy.py
+
+    cat >/etc/systemd/system/docker-proxy.service <<EOF
+[Unit]
+Description=Docker API filter proxy (docker.sock -> podman.sock)
+After=network.target
+Wants=podman.socket
+
+[Service]
+Type=simple
+Environment=UPSTREAM_SOCK=$TARGET_SOCK
+ExecStart=/usr/bin/python3 -u /usr/local/lib/podman-docker-filter-proxy.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload || true
+    systemctl enable --now docker-proxy.service || true
   fi
 else
-  log "跳过 /var/run/docker.sock 软链（更推荐依赖 DOCKER_HOST）。"
+  # 可选软链
+  if [[ "$SYMLINK_DOCKER_SOCK" == "1" ]]; then
+    log "创建 /var/run/docker.sock -> $TARGET_SOCK 软链..."
+    install -d -m 0775 /var/run
+    if [[ -n "$TARGET_SOCK" ]]; then
+      [[ -e /var/run/docker.sock && ! -L /var/run/docker.sock ]] || ln -sfn "$TARGET_SOCK" /var/run/docker.sock
+    else
+      warn "无有效的 Podman socket，跳过 docker.sock 软链创建。"
+    fi
+  else
+    log "跳过 /var/run/docker.sock 软链（更推荐依赖 DOCKER_HOST）。"
+  fi
 fi
 
 # 安装 compose
