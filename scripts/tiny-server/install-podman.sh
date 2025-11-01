@@ -13,6 +13,7 @@ INTERACTIVE="${INTERACTIVE:-0}"                 # 交互式模式
 ENABLE_SWAP="${ENABLE_SWAP:-1}"                 # 是否创建/启用 Swap（默认开启）
 SWAP_SIZE_MB="${SWAP_SIZE_MB:-2048}"           # Swap 大小（MB），默认 2048=2G
 INSTALL_COMMON_PKGS="${INSTALL_COMMON_PKGS:-1}" # 是否安装常用工具（curl vim gzip tar bash less htop net-tools unzip）
+DOCKER_SERVICE_SHIM="${DOCKER_SERVICE_SHIM:-1}" # 是否创建 docker.service 兼容层（映射到 podman.socket）
 # ============================================
 
 log(){ echo -e "\033[1;32m[INFO]\033[0m $*"; }
@@ -76,6 +77,8 @@ if [[ "$INTERACTIVE" == "1" ]]; then
 
   INSTALL_COMMON_PKGS="$(ask_bool "安装常用工具包(curl vim gzip tar bash less htop net-tools unzip)?" "$INSTALL_COMMON_PKGS")"
 
+  DOCKER_SERVICE_SHIM="$(ask_bool "创建 docker.service 兼容层(指向 podman.socket)?" "$DOCKER_SERVICE_SHIM")"
+
   echo "\n== 配置摘要 =="
   echo "安装模式: $MODE"
   if [[ "$MODE" == "rootless" ]]; then
@@ -87,6 +90,7 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   echo "低端口映射: $([[ "$ALLOW_LOW_PORTS" == 1 ]] && echo 允许 || echo 禁止)"
   echo "Swap: $([[ "$ENABLE_SWAP" == 1 ]] && echo 启用 || echo 关闭)，大小 ${SWAP_SIZE_MB}MB"
   echo "常用工具包: $([[ "$INSTALL_COMMON_PKGS" == 1 ]] && echo 启用 || echo 关闭)"
+  echo "docker.service 兼容层: $([[ "$DOCKER_SERVICE_SHIM" == 1 ]] && echo 启用 || echo 关闭)"
   read -r -p "确认开始安装? [Y/n] " _go || true
   _go="${_go:-y}"; [[ "${_go,,}" == y* ]] || die "用户取消。"
 fi
@@ -267,6 +271,131 @@ else
   else
     TARGET_SOCK=""  # 不设置 DOCKER_HOST，避免误导
   fi
+fi
+
+# ========== systemd docker.service 兼容层（可选） ==========
+if [[ "$DOCKER_SERVICE_SHIM" == "1" ]]; then
+  if [[ "$(ps -p 1 -o comm= --no-headers)" == "systemd" ]] && command -v systemctl >/dev/null; then
+    if systemctl list-unit-files | grep -q '^podman\.socket'; then
+      if ! systemctl list-unit-files | grep -q '^docker\.service'; then
+        log "创建 docker.service 兼容层（映射到 podman.socket）..."
+        cat >/etc/systemd/system/docker.service <<'EOF'
+[Unit]
+Description=Docker compatibility shim (via Podman socket)
+Documentation=https://docs.podman.io/
+Wants=podman.socket
+After=network-online.target
+ConditionPathExists=!/usr/bin/dockerd
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/systemctl start podman.socket
+ExecStop=/bin/systemctl stop podman.socket
+ExecReload=/bin/systemctl restart podman.socket
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload
+        systemctl enable docker.service || true
+      else
+        warn "已存在 docker.service，跳过创建兼容层。"
+      fi
+      # 为 docker.socket 创建到 podman.socket 的别名（symlink），兼容 `systemctl restart docker.socket`
+      if [[ ! -e /etc/systemd/system/docker.socket ]]; then
+        frag_path="$(systemctl show -p FragmentPath podman.socket 2>/dev/null | sed -E 's/^FragmentPath=//')"
+        target=""
+        if [[ -n "$frag_path" && -f "$frag_path" ]]; then
+          target="$frag_path"
+        else
+          for p in /lib/systemd/system/podman.socket /usr/lib/systemd/system/podman.socket /etc/systemd/system/podman.socket; do
+            if [[ -f "$p" ]]; then target="$p"; break; fi
+          done
+        fi
+        if [[ -n "$target" ]]; then
+          ln -s "$target" /etc/systemd/system/docker.socket
+          systemctl daemon-reload
+          log "已创建 docker.socket -> $(basename "$target") 别名。"
+        else
+          warn "未找到 podman.socket 单元文件路径，无法创建 docker.socket 别名。"
+        fi
+      else
+        warn "已存在 /etc/systemd/system/docker.socket，跳过创建。"
+      fi
+    else
+      warn "未发现 podman.socket 单元，跳过 docker.service 兼容层创建。"
+    fi
+    # 安装自动清理逻辑：若未来安装了真实 Docker，则移除兼容层与别名
+    log "安装 docker shim 自动清理逻辑（检测 /usr/bin/dockerd）..."
+    cat >/usr/local/sbin/podman-docker-shim-cleanup.sh <<'EOSH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+is_systemd(){ [[ "$(ps -p 1 -o comm= --no-headers)" == "systemd" ]] && command -v systemctl >/dev/null; }
+
+if [[ ! -x /usr/bin/dockerd ]]; then
+  exit 0
+fi
+
+if ! is_systemd; then
+  exit 0
+fi
+
+# 只清理本脚本创建的 docker.service（位于 /etc/systemd/system 且指向 podman.socket 的 oneshot）
+if [[ -f /etc/systemd/system/docker.service ]]; then
+  if grep -q "Docker compatibility shim (via Podman socket)" /etc/systemd/system/docker.service 2>/dev/null \
+     || grep -q "ExecStart=/bin/systemctl start podman.socket" /etc/systemd/system/docker.service 2>/dev/null; then
+    systemctl disable --now docker.service 2>/dev/null || true
+    rm -f /etc/systemd/system/docker.service || true
+  fi
+fi
+
+# 只清理到 podman.socket 的 docker.socket 别名（符号链接且目标包含 podman.socket）
+if [[ -L /etc/systemd/system/docker.socket ]]; then
+  target="$(readlink -f /etc/systemd/system/docker.socket || true)"
+  if [[ "$target" == *"podman.socket"* ]]; then
+    systemctl stop docker.socket 2>/dev/null || true
+    rm -f /etc/systemd/system/docker.socket || true
+  fi
+fi
+
+systemctl daemon-reload || true
+exit 0
+EOSH
+    chmod +x /usr/local/sbin/podman-docker-shim-cleanup.sh
+
+    # systemd path 单元：监控 /usr/bin/dockerd 的出现并触发清理
+    cat >/etc/systemd/system/podman-docker-shim-cleanup.service <<'EOF'
+[Unit]
+Description=Cleanup docker shim when real Docker is installed
+ConditionPathExists=/usr/bin/dockerd
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/podman-docker-shim-cleanup.sh
+EOF
+
+    cat >/etc/systemd/system/podman-docker-shim-cleanup.path <<'EOF'
+[Unit]
+Description=Watch for /usr/bin/dockerd to cleanup docker shim
+
+[Path]
+PathExists=/usr/bin/dockerd
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload || true
+    systemctl enable --now podman-docker-shim-cleanup.path || true
+    # 若已存在 dockerd，立即清理一次
+    /usr/local/sbin/podman-docker-shim-cleanup.sh || true
+  else
+    warn "非 systemd 环境或 systemctl 不可用，跳过 docker.service 兼容层。"
+  fi
+else
+  log "已禁用 docker.service 兼容层创建（DOCKER_SERVICE_SHIM=0）。"
 fi
 
 # 配置默认搜索仓库
