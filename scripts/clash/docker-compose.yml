@@ -1,0 +1,13 @@
+services:
+  sing-box:
+    image: ghcr.io/sagernet/sing-box:latest
+    container_name: sing-box
+    restart: always
+    network_mode: host
+    volumes:
+      - $PWD/config.json:/etc/sing-box/config.json
+      - $PWD/server.pem:/etc/sing-box/server.pem
+      - $PWD/server.key:/etc/sing-box/server.key
+    environment:
+      - TZ=Asia/Shanghai
+    command: -D /var/lib/sing-box -C /etc/sing-box/ run

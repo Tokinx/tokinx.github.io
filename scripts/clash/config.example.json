@@ -1,0 +1,45 @@
+{
+  "log": { "level": "info" },
+  "inbounds": [
+    {
+      "type": "vless",
+      "tag": "reality-in",
+      "listen": "::",
+      "listen_port": 31735,
+      "users": [{ "uuid": "⭕️YOUR UUID HERE", "flow": "xtls-rprx-vision" }],
+      "tls": {
+        "enabled": true,
+        "server_name": "music.apple.com",
+        "reality": {
+          "enabled": true,
+          "handshake": { "server": "music.apple.com", "server_port": 443 },
+          "private_key": "⭕️YOUR PRIVATE KEY HERE",
+          "short_id": ["⭕️YOUR SHORT ID HERE"]
+        }
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "hy2-in",
+      "listen": "::",
+      "listen_port": 32735,
+      "users": [{ "password": "⭕️YOUR PASSWORD HERE" }],
+      "tls": {
+        "enabled": true,
+        "server_name": "music.apple.com",
+        "alpn": ["h3"],
+        "certificate_path": "/etc/sing-box/server.pem",
+        "key_path": "/etc/sing-box/server.key"
+      }
+    },
+    {
+      "type": "vmess",
+      "tag": "vmess-in",
+      "listen": "::",
+      "listen_port": 33735,
+      "transport": { "type": "ws", "path": "/⭕️YOUR PATH HERE/" },
+      "users": [{ "uuid": "⭕️YOUR UUID HERE", "alterId": 0 }]
+    }
+  ],
+  "outbounds": [{ "type": "direct" }, { "type": "block", "tag": "block" }]
+}
