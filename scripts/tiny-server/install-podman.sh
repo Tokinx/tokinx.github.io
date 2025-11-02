@@ -1,18 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# ========= 可通过环境变量覆盖的默认值 =========
-MODE="${MODE:-root}"                     # rootless | root（默认 root 更稳妥）
-USERNAME="${USERNAME:-docker_usr}"       # rootless 模式下的运行用户
-USER_UID="${USER_UID:-1000}"             # 该用户的 UID
+# ========= 可通过环境变量覆盖的默认值（仅 root 模式） =========
 INSTALL_COMPOSE_V2="${INSTALL_COMPOSE_V2:-1}"
 INSTALL_COMPOSE_V1="${INSTALL_COMPOSE_V1:-0}"   # v1 已弃用，不建议开启
 SYMLINK_DOCKER_SOCK="${SYMLINK_DOCKER_SOCK:-0}" # 是否创建 /var/run/docker.sock 软链
-ALLOW_LOW_PORTS="${ALLOW_LOW_PORTS:-0}"         # 是否放开 <1024 端口映射
 INTERACTIVE="${INTERACTIVE:-0}"                 # 交互式模式
 ENABLE_SWAP="${ENABLE_SWAP:-1}"                 # 是否创建/启用 Swap（默认开启）
 SWAP_SIZE_MB="${SWAP_SIZE_MB:-2048}"           # Swap 大小（MB），默认 2048=2G
-INSTALL_COMMON_PKGS="${INSTALL_COMMON_PKGS:-1}" # 是否安装常用工具（curl vim gzip tar bash less htop net-tools unzip）
+INSTALL_COMMON_PKGS="${INSTALL_COMMON_PKGS:-1}" # 是否安装常用工具（vim gzip tar less htop net-tools unzip）
 DOCKER_SERVICE_SHIM="${DOCKER_SERVICE_SHIM:-1}" # 是否创建 docker.service 兼容层（映射到 podman.socket）
 DOCKER_CLI_HACKS="${DOCKER_CLI_HACKS:-1}"       # Docker CLI 兼容 hack：静默提示与 logs 参数重排
 # Podman wrapper：剥离 Docker 专用但 Podman 不支持的参数（默认移除 --memory-swappiness）
@@ -27,7 +23,16 @@ DOCKER_API_FILTER_PROXY="${DOCKER_API_FILTER_PROXY:-1}"
 # 是否自动为容器生成并启用 systemd 单元（安装时对现有容器；运行时由代理对新容器）
 AUTOGEN_SYSTEMD_UNITS="${AUTOGEN_SYSTEMD_UNITS:-1}"
 # 仅对这些重启策略的容器生成单元（空格分隔）
-AUTOGEN_MATCH_POLICY="${AUTOGEN_MATCH_POLICY:-always unless-stopped}"
+# 默认包含 always、unless-stopped、on-failure（含 on-failure:x）
+AUTOGEN_MATCH_POLICY="${AUTOGEN_MATCH_POLICY:-always unless-stopped on-failure}"
+# 定时扫描生成自启动（root 模式专用）：是否启用与间隔（分钟）
+ENABLE_PERIODIC_AUTOUNIT="${ENABLE_PERIODIC_AUTOUNIT:-1}"  # 1 启用 0 关闭
+AUTOUNIT_INTERVAL_MIN="${AUTOUNIT_INTERVAL_MIN:-1}"        # 每 N 分钟扫描一次
+# 定时扫描清理策略（root 模式专用）：是否在以下情况下禁用/移除 unit
+# 注意：默认不清理，以免误删。按需开启。
+AUTOUNIT_PRUNE_POLICY_MISMATCH="${AUTOUNIT_PRUNE_POLICY_MISMATCH:-1}"  # 1: 当容器重启策略不在允许集合时，禁用对应 unit
+AUTOUNIT_PRUNE_MISSING_CONTAINER="${AUTOUNIT_PRUNE_MISSING_CONTAINER:-1}" # 1: 当系统中已不存在该容器名时，禁用对应 unit
+AUTOUNIT_REMOVE_UNIT_ON_PRUNE="${AUTOUNIT_REMOVE_UNIT_ON_PRUNE:-1}"    # 1: 清理时同时删除 unit 文件
 # ============================================
 
 log(){ echo -e "\033[1;32m[INFO]\033[0m $*"; }
@@ -38,7 +43,6 @@ trap 'err "脚本执行失败（行 $LINENO）。"; exit 1' ERR
 
 [[ "$(id -u)" -eq 0 ]] || die "请以 root 运行。"
 command -v apt-get >/dev/null || die "需要基于 apt 的系统（Debian/Ubuntu）。"
-[[ "$MODE" == "rootless" || "$MODE" == "root" ]] || die "MODE 仅支持 rootless|root"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -75,21 +79,15 @@ ask_choice(){
 
 if [[ "$INTERACTIVE" == "1" ]]; then
   echo "== 交互式安装配置 =="
-  MODE="$(ask_choice "选择安装模式" "$MODE" rootless root)"
-  if [[ "$MODE" == "rootless" ]]; then
-    USERNAME="$(ask_value "rootless 模式运行用户名" "$USERNAME")"
-    USER_UID="$(ask_value "该用户 UID" "$USER_UID")"
-  fi
   INSTALL_COMPOSE_V2="$(ask_bool "安装 docker-compose v2?" "$INSTALL_COMPOSE_V2")"
   INSTALL_COMPOSE_V1="$(ask_bool "安装 docker-compose v1(不推荐)?" "$INSTALL_COMPOSE_V1")"
   SYMLINK_DOCKER_SOCK="$(ask_bool "创建 /var/run/docker.sock 软链?" "$SYMLINK_DOCKER_SOCK")"
-  ALLOW_LOW_PORTS="$(ask_bool "允许 rootless 绑定 <1024 端口?" "$ALLOW_LOW_PORTS")"
   ENABLE_SWAP="$(ask_bool "创建并启用 Swap?" "$ENABLE_SWAP")"
   if [[ "$ENABLE_SWAP" == "1" ]]; then
     SWAP_SIZE_MB="$(ask_value "Swap 大小(MB)" "$SWAP_SIZE_MB")"
   fi
 
-  INSTALL_COMMON_PKGS="$(ask_bool "安装常用工具包(curl vim gzip tar bash less htop net-tools unzip)?" "$INSTALL_COMMON_PKGS")"
+  INSTALL_COMMON_PKGS="$(ask_bool "安装常用工具包(vim gzip tar less htop net-tools unzip)?" "$INSTALL_COMMON_PKGS")"
 
   DOCKER_SERVICE_SHIM="$(ask_bool "创建 docker.service 兼容层(指向 podman.socket)?" "$DOCKER_SERVICE_SHIM")"
 
@@ -108,14 +106,10 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   fi
 
   echo "\n== 配置摘要 =="
-  echo "安装模式: $MODE"
-  if [[ "$MODE" == "rootless" ]]; then
-    echo "用户: $USERNAME (UID=$USER_UID)"
-  fi
+  echo "安装模式: root"
   echo "compose v2: $([[ "$INSTALL_COMPOSE_V2" == 1 ]] && echo 启用 || echo 关闭)"
   echo "compose v1: $([[ "$INSTALL_COMPOSE_V1" == 1 ]] && echo 启用 || echo 关闭)"
   echo "docker.sock 软链: $([[ "$SYMLINK_DOCKER_SOCK" == 1 ]] && echo 启用 || echo 关闭)"
-  echo "低端口映射: $([[ "$ALLOW_LOW_PORTS" == 1 ]] && echo 允许 || echo 禁止)"
   echo "Swap: $([[ "$ENABLE_SWAP" == 1 ]] && echo 启用 || echo 关闭)，大小 ${SWAP_SIZE_MB}MB"
   echo "常用工具包: $([[ "$INSTALL_COMMON_PKGS" == 1 ]] && echo 启用 || echo 关闭)"
   echo "docker.service 兼容层: $([[ "$DOCKER_SERVICE_SHIM" == 1 ]] && echo 启用 || echo 关闭)"
@@ -181,32 +175,16 @@ fi
 # 安装
 log "安装 Podman 与依赖..."
 apt-get update -y
-# 根据发行版可用性选择 logind 相关包（Debian/Ubuntu: systemd 内含 logind；部分发行版为 elogind）
-LOGIND_PKG=""
-if apt-cache show systemd-logind >/dev/null 2>&1; then
-  LOGIND_PKG="systemd-logind"
-elif apt-cache show systemd >/dev/null 2>&1; then
-  LOGIND_PKG="systemd"
-elif apt-cache show elogind >/dev/null 2>&1; then
-  LOGIND_PKG="elogind"
-else
-  warn "未找到可安装的 logind 包（systemd/elogind），将跳过安装。"
-fi
-
-# 组装安装包列表
-PKGS=(podman podman-docker uidmap slirp4netns fuse-overlayfs \
-  dbus-user-session curl wget ca-certificates jq sudo python3)
+# 组装安装包列表（仅 root 模式所需）
+PKGS=(podman podman-docker curl wget ca-certificates jq sudo python3)
 if [[ "$INSTALL_COMMON_PKGS" == "1" ]]; then
   PKGS+=(curl vim gzip tar bash less htop net-tools unzip)
 fi
-if [[ -n "$LOGIND_PKG" ]]; then
-  PKGS+=("$LOGIND_PKG")
-fi
 apt-get install -y "${PKGS[@]}"
 
-# 确认 PID1 为 systemd
+# 确认 PID1 为 systemd（否则 podman.socket 与 systemd 自启动不可用）
 if [[ "$(ps -p 1 -o comm= --no-headers)" != "systemd" ]]; then
-  warn "当前系统 PID1 非 systemd，user@UID 与 --user 功能可能不可用。建议改用 MODE=root。"
+  warn "当前系统 PID1 非 systemd，podman.socket 与 systemd 单元将不可用，自启动功能无法生效。"
 fi
 
 # Docker CLI 兼容 hack：静默兼容提示与 logs 参数顺序修复
@@ -408,149 +386,190 @@ EOWRAP
   fi
 
 TARGET_SOCK=""
-if [[ "$MODE" == "rootless" ]]; then
-  # 用户
-  log "校验/创建用户：$USERNAME（期望 UID=$USER_UID）..."
-  if id "$USERNAME" &>/dev/null; then
-    USER_UID="$(id -u "$USERNAME")"
-  else
-    if getent passwd "$USER_UID" >/dev/null; then
-      useradd -m -s /bin/bash "$USERNAME"
+# 仅在 systemd 存在且有 podman.socket 时启用 socket
+SOCKET_ENABLED=0
+if [[ "$(ps -p 1 -o comm= --no-headers)" == "systemd" ]] && command -v systemctl >/dev/null; then
+  if systemctl list-unit-files | grep -q '^podman\.socket'; then
+    log "启用系统级 podman.socket..."
+    if systemctl enable --now podman.socket; then
+      SOCKET_ENABLED=1
     else
-      useradd -m -u "$USER_UID" -s /bin/bash "$USERNAME"
+      warn "启用 podman.socket 失败，跳过设置 DOCKER_HOST。"
     fi
-    usermod -aG sudo "$USERNAME" || true
-  fi
-  groupadd -f docker || true
-  groupadd -f podman || true
-  usermod -aG docker,podman "$USERNAME" || true
-
-  # 让 user@UID 与 user-bus 就绪
-  log "启用 logind 与 linger..."
-  # 自适应启用 logind 服务（systemd-logind 或 elogind）
-  LOGIND_SVC=""
-  if systemctl list-unit-files | grep -q '^systemd-logind\.service'; then
-    LOGIND_SVC="systemd-logind"
-  elif systemctl list-unit-files | grep -q '^elogind\.service'; then
-    LOGIND_SVC="elogind"
-  fi
-  if [[ -n "$LOGIND_SVC" ]]; then
-    systemctl enable --now "$LOGIND_SVC"
   else
-    warn "未发现 logind 服务单元，跳过启用。"
-  fi
-  loginctl enable-linger "$USERNAME" || true
-
-  log "启动 user@${USER_UID}.service（创建 /run/user/${USER_UID} 与 user bus）..."
-  systemctl start "user@${USER_UID}.service" || true
-
-  # 等待 user bus
-  for i in {1..15}; do
-    [[ -S "/run/user/${USER_UID}/bus" ]] && break
-    sleep 1
-  done
-  if [[ ! -S "/run/user/${USER_UID}/bus" ]]; then
-    warn "user bus 尚未就绪：/run/user/${USER_UID}/bus 不存在，稍后将尝试 --machine 方式。"
-  fi
-
-  # 尝试用两种方式启动用户级 podman.socket
-  TARGET_SOCK="/run/user/${USER_UID}/podman/podman.sock"
-  log "尝试以 $USERNAME 启用/启动 podman.socket..."
-  if ! sudo -u "$USERNAME" \
-      XDG_RUNTIME_DIR="/run/user/${USER_UID}" \
-      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${USER_UID}/bus" \
-      systemctl --user enable --now podman.socket; then
-    warn "直接 --user 方式失败，改用 --machine=${USERNAME}@.host 再试..."
-    systemctl --user -M "${USERNAME}@.host" enable --now podman.socket
-  fi
-
-  # 写入 DOCKER_HOST
-  DOCKER_HOST_LINE="export DOCKER_HOST=unix://$TARGET_SOCK"
-  for f in "/home/$USERNAME/.bashrc" "/home/$USERNAME/.profile" "/home/$USERNAME/.bash_profile"; do
-    [[ -f "$f" ]] || touch "$f"
-    grep -q "$DOCKER_HOST_LINE" "$f" || echo "$DOCKER_HOST_LINE" >> "$f"
-  done
-  chown -R "$USERNAME:$USERNAME" "/home/$USERNAME"
-
-  if [[ "$ALLOW_LOW_PORTS" == "1" ]]; then
-    echo "net.ipv4.ip_unprivileged_port_start=0" >/etc/sysctl.d/99-podman-unpriv-ports.conf
-    sysctl --system >/dev/null
+    warn "未发现 podman.socket 单元，跳过设置 DOCKER_HOST。"
   fi
 else
-  # root 模式（更稳妥）：仅在 systemd 存在且有 podman.socket 时启用 socket
-  SOCKET_ENABLED=0
-  if [[ "$(ps -p 1 -o comm= --no-headers)" == "systemd" ]] && command -v systemctl >/dev/null; then
-    if systemctl list-unit-files | grep -q '^podman\.socket'; then
-      log "启用系统级 podman.socket（root 模式）..."
-      if systemctl enable --now podman.socket; then
-        SOCKET_ENABLED=1
-      else
-        warn "启用 podman.socket 失败，跳过设置 DOCKER_HOST。"
-      fi
-    else
-      warn "未发现 podman.socket 单元，跳过设置 DOCKER_HOST。"
-    fi
-  else
-    warn "PID1 非 systemd 或 systemctl 不可用，跳过启用 podman.socket。"
-  fi
+  warn "PID1 非 systemd 或 systemctl 不可用，跳过启用 podman.socket。"
+fi
 
-  if [[ "$SOCKET_ENABLED" == "1" ]]; then
-    TARGET_SOCK="/run/podman/podman.sock"
-    DOCKER_HOST_LINE="export DOCKER_HOST=unix://$TARGET_SOCK"
-    grep -q "$DOCKER_HOST_LINE" /root/.bashrc || echo "$DOCKER_HOST_LINE" >>/root/.bashrc
-    echo "$DOCKER_HOST_LINE" >/etc/profile.d/podman-docker-host.sh
-  else
-    TARGET_SOCK=""  # 不设置 DOCKER_HOST，避免误导
-  fi
+if [[ "$SOCKET_ENABLED" == "1" ]]; then
+  TARGET_SOCK="/run/podman/podman.sock"
+  DOCKER_HOST_LINE="export DOCKER_HOST=unix://$TARGET_SOCK"
+  grep -q "$DOCKER_HOST_LINE" /root/.bashrc || echo "$DOCKER_HOST_LINE" >>/root/.bashrc
+  echo "$DOCKER_HOST_LINE" >/etc/profile.d/podman-docker-host.sh
+else
+  TARGET_SOCK=""  # 不设置 DOCKER_HOST，避免误导
 fi
 
 # 安装时为现有容器自动生成并启用 systemd 单元（可选）
 if [[ "$AUTOGEN_SYSTEMD_UNITS" == "1" ]]; then
   log "为现有容器生成并启用 systemd 单元（策略匹配：$AUTOGEN_MATCH_POLICY）..."
   gen_for_list(){
-    local list_cmd="$1"; local mode="$2"; local user="$3"; local uid="$4";
+    local list_cmd="$1";
     local names
     names=$(bash -lc "$list_cmd" 2>/dev/null || true)
     [[ -n "$names" ]] || return 0
     for c in $names; do
       local pol
-      if [[ "$mode" == "rootless" ]]; then
-        pol=$(sudo -u "$user" XDG_RUNTIME_DIR="/run/user/${uid}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus" podman inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$c" 2>/dev/null || true)
-      else
-        pol=$(podman inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$c" 2>/dev/null || true)
-      fi
+      pol=$(podman inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$c" 2>/dev/null || true)
       for want in $AUTOGEN_MATCH_POLICY; do
         if [[ "$pol" == "$want" ]]; then
-          if [[ "$mode" == "rootless" ]]; then
-            sudo -u "$user" XDG_RUNTIME_DIR="/run/user/${uid}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus" podman generate systemd --new --name "$c" --files --restart-policy=always >/dev/null 2>&1 || true
-            if [[ -f "container-$c.service" ]]; then
-              install -D -m 0644 "container-$c.service" "/home/$user/.config/systemd/user/container-$c.service"
-              chown "$user:$user" "/home/$user/.config/systemd/user/container-$c.service"
-              rm -f "container-$c.service"
-              sudo -u "$user" systemctl --user daemon-reload || true
-              sudo -u "$user" systemctl --user enable --now "container-$c.service" || true
-            fi
-          else
-            podman generate systemd --new --name "$c" --files --restart-policy=always >/dev/null 2>&1 || true
-            if [[ -f "container-$c.service" ]]; then
-              install -D -m 0644 "container-$c.service" "/etc/systemd/system/container-$c.service"
-              rm -f "container-$c.service"
-              systemctl daemon-reload || true
-              systemctl enable --now "container-$c.service" || true
-            fi
+          podman generate systemd --new --name "$c" --files >/dev/null 2>&1 || true
+          if [[ -f "container-$c.service" ]]; then
+            install -D -m 0644 "container-$c.service" "/etc/systemd/system/container-$c.service"
+            rm -f "container-$c.service"
+            systemctl daemon-reload || true
+            systemctl enable --now "container-$c.service" || true
           fi
           break
         fi
       done
     done
   }
-  if [[ "$MODE" == "rootless" ]]; then
-    gen_for_list "sudo -u $USERNAME podman ps -a --format '{{.Names}}'" "rootless" "$USERNAME" "$USER_UID"
-  else
-    gen_for_list "podman ps -a --format '{{.Names}}'" "root" "" ""
-  fi
+  gen_for_list "podman ps -a --format '{{.Names}}'"
 else
   log "跳过现有容器 systemd 单元生成（AUTOGEN_SYSTEMD_UNITS=0）。"
+fi
+
+# ========== root 模式定时扫描：为符合策略容器生成/启用自启动单元 ==========
+if [[ "$ENABLE_PERIODIC_AUTOUNIT" == "1" ]]; then
+  log "安装 root 定时任务：每 ${AUTOUNIT_INTERVAL_MIN} 分钟扫描一次，为 restart=always|unless-stopped|on-failure 的容器生成/启用自启动..."
+  install -d -m 0755 /usr/local/sbin
+  cat >/usr/local/sbin/podman-autounit-root.sh <<'EOSH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+log(){ echo -e "\033[1;32m[auto]\033[0m $*"; }
+warn(){ echo -e "\033[1;33m[auto]\033[0m $*"; }
+
+command -v podman >/dev/null || { warn "podman 不存在，退出"; exit 0; }
+
+# 允许的重启策略集合（安装时注入）
+WANT_POLICIES="__WANT_POLICIES__"
+# 清理策略（安装时注入）
+PRUNE_POLICY_MISMATCH=__PRUNE_POLICY_MISMATCH__
+PRUNE_MISSING_CONTAINER=__PRUNE_MISSING_CONTAINER__
+REMOVE_UNIT_ON_PRUNE=__REMOVE_UNIT_ON_PRUNE__
+
+# 收集所有容器名称
+names=$(podman ps -a --format '{{.Names}}' 2>/dev/null || true)
+
+changed=0
+for n in $names; do
+  pol=$(podman inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$n" 2>/dev/null || true)
+  match=0
+  for wp in $WANT_POLICIES; do
+    [[ "$pol" == "$wp" ]] && match=1 && break
+  done
+  if [[ "$match" -eq 1 ]]; then
+    # 生成 service 文件（使用 --new/--name 与 --restart-policy=always）
+      if podman generate systemd --new --name "$n" --files >/dev/null 2>&1; then
+      if [[ -f "container-$n.service" ]]; then
+        dst="/etc/systemd/system/container-$n.service"
+        if [[ -f "$dst" ]] && cmp -s "container-$n.service" "$dst"; then
+          rm -f "container-$n.service"
+        else
+          install -D -m 0644 "container-$n.service" "$dst"
+          rm -f "container-$n.service"
+          changed=1
+          log "更新：container-$n.service"
+        fi
+        systemctl enable --now "container-$n.service" >/dev/null 2>&1 || true
+      fi
+    fi
+  else
+    # 不匹配：可选清理策略
+    if [[ "$PRUNE_POLICY_MISMATCH" -eq 1 ]]; then
+      unit="container-$n.service"
+      if systemctl list-unit-files | grep -q "^$unit"; then
+        systemctl disable --now "$unit" >/dev/null 2>&1 || true
+        if [[ "$REMOVE_UNIT_ON_PRUNE" -eq 1 ]]; then
+          rm -f "/etc/systemd/system/$unit" || true
+        fi
+        changed=1
+        log "禁用策略不匹配的 unit：$unit (policy=$pol)"
+      fi
+    fi
+  fi
+done
+
+# 可选：清理缺失容器对应的 unit（例如你删除了容器且希望同时取消自启动）
+if [[ "$PRUNE_MISSING_CONTAINER" -eq 1 ]]; then
+  shopt -s nullglob
+  for unit in /etc/systemd/system/container-*.service; do
+    [[ -e "$unit" ]] || break
+    bn="$(basename "$unit")"
+    cname="${bn#container-}"
+    cname="${cname%.service}"
+    found=0
+    for n in $names; do
+      [[ "$n" == "$cname" ]] && found=1 && break
+    done
+    if [[ "$found" -eq 0 ]]; then
+      systemctl disable --now "$bn" >/dev/null 2>&1 || true
+      if [[ "$REMOVE_UNIT_ON_PRUNE" -eq 1 ]]; then
+        rm -f "$unit" || true
+      fi
+      changed=1
+      log "禁用缺失容器的 unit：$bn"
+    fi
+  done
+  shopt -u nullglob
+fi
+
+if [[ "$changed" -eq 1 ]]; then
+  systemctl daemon-reload || true
+fi
+exit 0
+EOSH
+  # 注入安装期的策略与参数
+  sed -i \
+    -e "s|__WANT_POLICIES__|$AUTOGEN_MATCH_POLICY|g" \
+    -e "s|__PRUNE_POLICY_MISMATCH__|$AUTOUNIT_PRUNE_POLICY_MISMATCH|g" \
+    -e "s|__PRUNE_MISSING_CONTAINER__|$AUTOUNIT_PRUNE_MISSING_CONTAINER|g" \
+    -e "s|__REMOVE_UNIT_ON_PRUNE__|$AUTOUNIT_REMOVE_UNIT_ON_PRUNE|g" \
+    /usr/local/sbin/podman-autounit-root.sh
+  chmod +x /usr/local/sbin/podman-autounit-root.sh
+
+  cat >/etc/systemd/system/podman-autounit-root.service <<'EOF'
+[Unit]
+Description=Scan Podman containers and enable systemd units (root)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/podman-autounit-root.sh
+EOF
+
+  cat >/etc/systemd/system/podman-autounit-root.timer <<EOF
+[Unit]
+Description=Periodic autounit for Podman containers (root)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=${AUTOUNIT_INTERVAL_MIN}min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload || true
+  systemctl enable --now podman-autounit-root.timer || true
+else
+  log "跳过 root 定时扫描（ENABLE_PERIODIC_AUTOUNIT=${ENABLE_PERIODIC_AUTOUNIT}）。"
 fi
 
 # ========== systemd docker.service 兼容层（可选） ==========
@@ -727,11 +746,9 @@ import os, sys, socket, threading, json, re, grp, subprocess, urllib.parse, temp
 
 UPSTREAM = os.environ.get('UPSTREAM_SOCK', '')
 LISTEN = '/var/run/docker.sock'
-MODE = os.environ.get('PODMAN_MODE', 'root')
-USERNAME = os.environ.get('PODMAN_USER', '')
-USER_UID = os.environ.get('USER_UID', '')
 AUTO_UNIT = os.environ.get('AUTO_UNIT', '1') == '1'
 PROXY_LOG = os.environ.get('PROXY_LOG', '0') == '1'
+WANT_POLICIES = set((os.environ.get('WANT_POLICIES','always unless-stopped on-failure') or '').split())
 
 STRIP_CREATE = {
     'HostConfig': [
@@ -855,43 +872,26 @@ def _inspect_name_root(cid):
     out = subprocess.check_output(['/usr/bin/podman','inspect','--format','{{.Name}}',cid])
     return out.decode().strip().lstrip('/')
 
-def _inspect_name_user(cid, username, uid):
-    env = os.environ.copy()
-    env.update({
-        'XDG_RUNTIME_DIR': f'/run/user/{uid}',
-        'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{uid}/bus'
-    })
-    out = subprocess.check_output(['sudo','-u',username,'/usr/bin/podman','inspect','--format','{{.Name}}',cid], env=env)
-    return out.decode().strip().lstrip('/')
+def _inspect_policy_root(cid):
+    out = subprocess.check_output(['/usr/bin/podman','inspect','--format','{{.HostConfig.RestartPolicy.Name}}',cid])
+    return out.decode().strip()
 
 def autounit_async(cid, name_hint=None):
     def worker():
         try:
-            if MODE == 'rootless' and USERNAME and USER_UID:
-                uid = USER_UID
-                name = name_hint or _inspect_name_user(cid, USERNAME, uid)
-                tmpd = tempfile.mkdtemp(prefix='podman-autounit-')
-                envu = {
-                    'XDG_RUNTIME_DIR': f'/run/user/{uid}',
-                    'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{uid}/bus'
-                }
-                _run(['sudo','-u',USERNAME,'/usr/bin/podman','generate','systemd','--new','--name',name,'--files','--restart-policy=always'], env=envu)
-                svc_cand = f'container-{name}.service'
-                # move to user systemd dir
-                outdir = f'/home/{USERNAME}/.config/systemd/user'
-                os.makedirs(outdir, exist_ok=True)
-                if os.path.exists(svc_cand):
-                    shutil.move(svc_cand, os.path.join(outdir, svc_cand))
-                _run(['sudo','-u',USERNAME,'systemctl','--user','daemon-reload'])
-                _run(['sudo','-u',USERNAME,'systemctl','--user','enable','--now',svc_cand])
-            else:
-                name = name_hint or _inspect_name_root(cid)
-                _run(['/usr/bin/podman','generate','systemd','--new','--name',name,'--files','--restart-policy=always'])
-                svc_cand = f'container-{name}.service'
-                if os.path.exists(svc_cand):
-                    shutil.move(svc_cand, os.path.join('/etc/systemd/system', svc_cand))
-                _run(['systemctl','daemon-reload'])
-                _run(['systemctl','enable','--now',svc_cand])
+            name = name_hint or _inspect_name_root(cid)
+            try:
+                pol = _inspect_policy_root(cid)
+            except Exception:
+                pol = ''
+            if pol not in WANT_POLICIES:
+                return
+            _run(['/usr/bin/podman','generate','systemd','--new','--name',name,'--files'])
+            svc_cand = f'container-{name}.service'
+            if os.path.exists(svc_cand):
+                shutil.move(svc_cand, os.path.join('/etc/systemd/system', svc_cand))
+            _run(['systemctl','daemon-reload'])
+            _run(['systemctl','enable','--now',svc_cand])
         except Exception as e:
             if PROXY_LOG:
                 sys.stderr.write('[proxy] autounit failed: %s\n' % e)
@@ -970,10 +970,8 @@ Wants=podman.socket
 [Service]
 Type=simple
 Environment=UPSTREAM_SOCK=$TARGET_SOCK
-Environment=PODMAN_MODE=$MODE
-Environment=PODMAN_USER=$USERNAME
-Environment=USER_UID=$USER_UID
 Environment=AUTO_UNIT=$AUTOGEN_SYSTEMD_UNITS
+Environment=WANT_POLICIES=$AUTOGEN_MATCH_POLICY
 ExecStart=/usr/bin/python3 -u /usr/local/lib/podman-docker-filter-proxy.py
 Restart=always
 
@@ -1026,28 +1024,20 @@ fi
 log "版本信息："
 podman --version || true
 if command -v docker-compose >/dev/null; then
-  if [[ "$MODE" == "rootless" ]]; then
-    sudo -u "$USERNAME" XDG_RUNTIME_DIR="/run/user/${USER_UID}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${USER_UID}/bus" docker-compose version || true
-  else
-    docker-compose version || true
-  fi
+  docker-compose version || true
 fi
 
 # 重启 Podman 以使配置（如 registries.conf）生效
 if [[ "$(ps -p 1 -o comm= --no-headers)" == "systemd" ]] && command -v systemctl >/dev/null; then
-  if [[ "$MODE" == "rootless" ]]; then
-    log "重启用户级 Podman（socket/service）..."
-    sudo -u "$USERNAME" \
-      XDG_RUNTIME_DIR="/run/user/${USER_UID}" \
-      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${USER_UID}/bus" \
-      bash -lc 'systemctl --user restart podman 2>/dev/null || true; systemctl --user restart podman.socket 2>/dev/null || true'
-    # 回退方式（机器作用域）
-    systemctl --user -M "${USERNAME}@.host" restart podman 2>/dev/null || true
-    systemctl --user -M "${USERNAME}@.host" restart podman.socket 2>/dev/null || true
-  else
-    log "重启系统级 Podman（socket/service）..."
-    systemctl restart podman 2>/dev/null || true
-    systemctl restart podman.socket 2>/dev/null || true
+  log "重启系统级 Podman（socket/service）..."
+  systemctl restart podman 2>/dev/null || true
+  systemctl restart podman.socket 2>/dev/null || true
+  # 末尾再检查一次 podman.socket 是否已启用开机自启，若未启用则再次启用
+  if systemctl list-unit-files | grep -q '^podman\.socket'; then
+    if ! systemctl is-enabled podman.socket >/dev/null 2>&1; then
+      log "检测到 podman.socket 未开机自启，尝试再次启用..."
+      systemctl enable --now podman.socket || true
+    fi
   fi
 else
   warn "非 systemd 环境或 systemctl 不可用，跳过重启 Podman。"
