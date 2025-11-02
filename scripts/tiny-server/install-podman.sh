@@ -22,15 +22,11 @@ DOCKER_ABS_PATH_DIVERT="${DOCKER_ABS_PATH_DIVERT:-1}"
 DOCKER_API_FILTER_PROXY="${DOCKER_API_FILTER_PROXY:-1}"
 # 是否自动为容器生成并启用 systemd 单元（安装时对现有容器；运行时由代理对新容器）
 AUTOGEN_SYSTEMD_UNITS="${AUTOGEN_SYSTEMD_UNITS:-1}"
-# 仅对这些重启策略的容器生成单元（空格分隔）
-# 默认包含 always、unless-stopped、on-failure（含 on-failure:x）
-AUTOGEN_MATCH_POLICY="${AUTOGEN_MATCH_POLICY:-always unless-stopped on-failure}"
 # 定时扫描生成自启动（root 模式专用）：是否启用与间隔（分钟）
 ENABLE_PERIODIC_AUTOUNIT="${ENABLE_PERIODIC_AUTOUNIT:-1}"  # 1 启用 0 关闭
-AUTOUNIT_INTERVAL_MIN="${AUTOUNIT_INTERVAL_MIN:-1}"        # 每 N 分钟扫描一次
+AUTOUNIT_INTERVAL_MIN="${AUTOUNIT_INTERVAL_MIN:-1}"        # 每分钟扫描一次
 # 定时扫描清理策略（root 模式专用）：是否在以下情况下禁用/移除 unit
 # 注意：默认不清理，以免误删。按需开启。
-AUTOUNIT_PRUNE_POLICY_MISMATCH="${AUTOUNIT_PRUNE_POLICY_MISMATCH:-1}"  # 1: 当容器重启策略不在允许集合时，禁用对应 unit
 AUTOUNIT_PRUNE_MISSING_CONTAINER="${AUTOUNIT_PRUNE_MISSING_CONTAINER:-1}" # 1: 当系统中已不存在该容器名时，禁用对应 unit
 AUTOUNIT_REMOVE_UNIT_ON_PRUNE="${AUTOUNIT_REMOVE_UNIT_ON_PRUNE:-1}"    # 1: 清理时同时删除 unit 文件
 # ============================================
@@ -101,9 +97,7 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   DOCKER_ABS_PATH_DIVERT="$(ask_bool "拦截绝对路径 /usr/bin/docker（dpkg-divert）?" "$DOCKER_ABS_PATH_DIVERT")"
   DOCKER_API_FILTER_PROXY="$(ask_bool "在 /var/run/docker.sock 部署 API 过滤代理?" "$DOCKER_API_FILTER_PROXY")"
   AUTOGEN_SYSTEMD_UNITS="$(ask_bool "自动为容器生成并启用 systemd 单元?" "$AUTOGEN_SYSTEMD_UNITS")"
-  if [[ "$AUTOGEN_SYSTEMD_UNITS" == "1" ]]; then
-    AUTOGEN_MATCH_POLICY="$(ask_value "匹配重启策略（空格分隔）" "$AUTOGEN_MATCH_POLICY")"
-  fi
+  # 所有容器均纳管为自启动，不再询问重启策略匹配
 
   echo "\n== 配置摘要 =="
   echo "安装模式: root"
@@ -117,7 +111,7 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   echo "Podman 参数剥离 wrapper: $([[ "$PODMAN_WRAPPER_STRIP" == 1 ]] && echo 启用 || echo 关闭)（剥离: $PODMAN_STRIP_FLAGS）"
   echo "拦截 /usr/bin/docker: $([[ "$DOCKER_ABS_PATH_DIVERT" == 1 ]] && echo 启用 || echo 关闭)"
   echo "Docker API 过滤代理: $([[ "$DOCKER_API_FILTER_PROXY" == 1 ]] && echo 启用 || echo 关闭)"
-  echo "自动生成 systemd 单元: $([[ "$AUTOGEN_SYSTEMD_UNITS" == 1 ]] && echo 启用 || echo 关闭)（策略: $AUTOGEN_MATCH_POLICY）"
+  echo "自动生成 systemd 单元: $([[ "$AUTOGEN_SYSTEMD_UNITS" == 1 ]] && echo 启用 || echo 关闭)（纳管全部容器）"
   read -r -p "确认开始安装? [Y/n] " _go || true
   _go="${_go:-y}"; [[ "${_go,,}" == y* ]] || die "用户取消。"
 fi
@@ -205,7 +199,7 @@ else
   STRIP_FLAGS=("${STRIP_FLAGS_DEFAULT[@]}")
 fi
 
-strip_args() {
+translate_and_strip_args() {
   local out=()
   local skip_next=0
   for arg in "$@"; do
@@ -214,6 +208,19 @@ strip_args() {
       continue
     fi
     local matched=0
+    # Translate --restart unless-stopped -> --restart always (Podman lacks unless-stopped)
+    if [[ "$arg" == "--restart" ]]; then
+      skip_next=1
+      matched=1
+      continue
+    fi
+    if [[ "$arg" == --restart=unless-stopped ]]; then
+      out+=("--restart=always"); matched=1; continue
+    fi
+    if [[ "$arg" == --restart=unless-stopped,* ]]; then
+      # e.g., unless-stopped:3 -> always (retry count irrelevant for always)
+      out+=("--restart=always"); matched=1; continue
+    fi
     for f in "${STRIP_FLAGS[@]}"; do
       if [[ "$arg" == "$f" ]]; then
         matched=1
@@ -234,7 +241,7 @@ strip_args() {
 if [[ "${1:-}" == "logs" ]]; then
   shift
   # Clean unsupported flags first (usually none for logs, but consistent)
-  mapfile -t _cleaned < <(strip_args "$@")
+  mapfile -t _cleaned < <(translate_and_strip_args "$@")
   flags=()
   containers=()
   with_val=(--tail -n --since --until)
@@ -264,7 +271,7 @@ if [[ "${1:-}" == "logs" ]]; then
   done
   exec podman logs "${flags[@]}" "${containers[@]}"
 else
-  mapfile -t _cleaned < <(strip_args "$@")
+  mapfile -t _cleaned < <(translate_and_strip_args "$@")
   exec podman "${_cleaned[@]}"
 fi
 EOWRAP
@@ -414,35 +421,23 @@ fi
 
 # 安装时为现有容器自动生成并启用 systemd 单元（可选）
 if [[ "$AUTOGEN_SYSTEMD_UNITS" == "1" ]]; then
-  log "为现有容器生成并启用 systemd 单元（策略匹配：$AUTOGEN_MATCH_POLICY）..."
+  log "为现有容器生成并启用 systemd 单元..."
   gen_for_list(){
     local list_cmd="$1";
     local names
     names=$(bash -lc "$list_cmd" 2>/dev/null || true)
     [[ -n "$names" ]] || return 0
     for c in $names; do
-      local pol match
-      pol=$(podman inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$c" 2>/dev/null || true)
-      match=0
-      for want in $AUTOGEN_MATCH_POLICY; do
-        if [[ "$pol" == "$want" ]]; then match=1; break; fi
-        if [[ "$want" == "on-failure" && ( "$pol" == on-failure:* || "$pol" == on-failure ) ]]; then match=1; break; fi
-      done
-      if [[ "$match" -eq 1 ]]; then
-        work="$(mktemp -d)" || work="/tmp"
-        if ( cd "$work" && podman generate systemd --new --name "$c" --files >/dev/null 2>&1 ); then
-          :
-        else
-          # fallback to non --new for REST API created containers
-          ( cd "$work" && podman generate systemd --name "$c" --files >/dev/null 2>&1 ) || true
-        fi
-        if [[ -f "$work/container-$c.service" ]]; then
-          install -D -m 0644 "$work/container-$c.service" "/etc/systemd/system/container-$c.service"
-          systemctl daemon-reload || true
-          systemctl enable --now "container-$c.service" || true
-        fi
-        rm -rf "$work" || true
+      work="$(mktemp -d)" || work="/tmp"
+      if ( cd "$work" && podman generate systemd --new --name "$c" --files >/dev/null 2>&1 ); then :; else
+        ( cd "$work" && podman generate systemd --name "$c" --files >/dev/null 2>&1 ) || true
       fi
+      if [[ -f "$work/container-$c.service" ]]; then
+        install -D -m 0644 "$work/container-$c.service" "/etc/systemd/system/container-$c.service"
+        systemctl daemon-reload || true
+        systemctl enable --now "container-$c.service" || true
+      fi
+      rm -rf "$work" || true
     done
   }
   gen_for_list "podman ps -a --format '{{.Names}}'"
@@ -452,7 +447,7 @@ fi
 
 # ========== root 模式定时扫描：为符合策略容器生成/启用自启动单元 ==========
 if [[ "$ENABLE_PERIODIC_AUTOUNIT" == "1" ]]; then
-  log "安装 root 定时任务：每 ${AUTOUNIT_INTERVAL_MIN} 分钟扫描一次，为 restart=always|unless-stopped|on-failure 的容器生成/启用自启动..."
+  log "安装 root 定时任务：每 ${AUTOUNIT_INTERVAL_MIN} 分钟扫描一次，为所有容器生成/启用自启动..."
   install -d -m 0755 /usr/local/sbin
   cat >/usr/local/sbin/podman-autounit-root.sh <<'EOSH'
 #!/usr/bin/env bash
@@ -463,10 +458,7 @@ warn(){ echo -e "\033[1;33m[auto]\033[0m $*"; }
 
 command -v podman >/dev/null || { warn "podman 不存在，退出"; exit 0; }
 
-# 允许的重启策略集合（安装时注入）
-WANT_POLICIES="__WANT_POLICIES__"
 # 清理策略（安装时注入）
-PRUNE_POLICY_MISMATCH=__PRUNE_POLICY_MISMATCH__
 PRUNE_MISSING_CONTAINER=__PRUNE_MISSING_CONTAINER__
 REMOVE_UNIT_ON_PRUNE=__REMOVE_UNIT_ON_PRUNE__
 
@@ -475,48 +467,27 @@ names=$(podman ps -a --format '{{.Names}}' 2>/dev/null || true)
 
 changed=0
 for n in $names; do
-  pol=$(podman inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$n" 2>/dev/null || true)
-  match=0
-  for wp in $WANT_POLICIES; do
-    if [[ "$pol" == "$wp" ]]; then match=1; break; fi
-    if [[ "$wp" == "on-failure" && ( "$pol" == on-failure:* || "$pol" == on-failure ) ]]; then match=1; break; fi
-  done
-  if [[ "$match" -eq 1 ]]; then
-    # 生成 service 文件到临时目录，再原子更新到 /etc/systemd/system
-    work="$(mktemp -d)" || work="/tmp"
-    # 首选 --new，如果失败（REST API 创建的容器），回退为非 --new
-    if ( cd "$work" && podman generate systemd --new --name "$n" --files >/dev/null 2>&1 ); then :; else
-      ( cd "$work" && podman generate systemd --name "$n" --files >/dev/null 2>&1 ) || true
-    fi
-    src="$work/container-$n.service"
-    if [[ -f "$src" ]]; then
-      dst="/etc/systemd/system/container-$n.service"
-      if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
-        :
-      else
-        install -D -m 0644 "$src" "$dst"
-        changed=1
-        log "更新：container-$n.service"
-      fi
-      systemctl enable --now "container-$n.service" >/dev/null 2>&1 || true
-    else
-      warn "未找到生成的 unit：$src"
-    fi
-    rm -rf "$work" || true
-  else
-    # 不匹配：可选清理策略
-    if [[ "$PRUNE_POLICY_MISMATCH" -eq 1 ]]; then
-      unit="container-$n.service"
-      if systemctl list-unit-files | grep -q "^$unit"; then
-        systemctl disable --now "$unit" >/dev/null 2>&1 || true
-        if [[ "$REMOVE_UNIT_ON_PRUNE" -eq 1 ]]; then
-          rm -f "/etc/systemd/system/$unit" || true
-        fi
-        changed=1
-        log "禁用策略不匹配的 unit：$unit (policy=$pol)"
-      fi
-    fi
+  # 生成 service 文件到临时目录，再原子更新到 /etc/systemd/system
+  work="$(mktemp -d)" || work="/tmp"
+  # 首选 --new，如果失败（REST API 创建的容器），回退为非 --new
+  if ( cd "$work" && podman generate systemd --new --name "$n" --files >/dev/null 2>&1 ); then :; else
+    ( cd "$work" && podman generate systemd --name "$n" --files >/dev/null 2>&1 ) || true
   fi
+  src="$work/container-$n.service"
+  if [[ -f "$src" ]]; then
+    dst="/etc/systemd/system/container-$n.service"
+    if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
+      :
+    else
+      install -D -m 0644 "$src" "$dst"
+      changed=1
+      log "更新：container-$n.service"
+    fi
+    systemctl enable --now "container-$n.service" >/dev/null 2>&1 || true
+  else
+    warn "未找到生成的 unit：$src"
+  fi
+  rm -rf "$work" || true
 done
 
 # 可选：清理缺失容器对应的 unit（例如你删除了容器且希望同时取消自启动）
@@ -550,8 +521,6 @@ exit 0
 EOSH
   # 注入安装期的策略与参数
   sed -i \
-    -e "s|__WANT_POLICIES__|$AUTOGEN_MATCH_POLICY|g" \
-    -e "s|__PRUNE_POLICY_MISMATCH__|$AUTOUNIT_PRUNE_POLICY_MISMATCH|g" \
     -e "s|__PRUNE_MISSING_CONTAINER__|$AUTOUNIT_PRUNE_MISSING_CONTAINER|g" \
     -e "s|__REMOVE_UNIT_ON_PRUNE__|$AUTOUNIT_REMOVE_UNIT_ON_PRUNE|g" \
     /usr/local/sbin/podman-autounit-root.sh
@@ -763,7 +732,6 @@ UPSTREAM = os.environ.get('UPSTREAM_SOCK', '')
 LISTEN = '/var/run/docker.sock'
 AUTO_UNIT = os.environ.get('AUTO_UNIT', '1') == '1'
 PROXY_LOG = os.environ.get('PROXY_LOG', '0') == '1'
-WANT_POLICIES = set((os.environ.get('WANT_POLICIES','always unless-stopped on-failure') or '').split())
 
 STRIP_CREATE = {
     'HostConfig': [
@@ -839,11 +807,22 @@ def rewrite(path, body):
             for k in STRIP_CREATE['HostConfig']:
                 if k in hc:
                     hc.pop(k, None); changed = True
+            # Map Docker-only restart policy unless-stopped -> always for Podman
+            rp = hc.get('RestartPolicy')
+            if isinstance(rp, dict):
+                name = (rp.get('Name') or '').strip()
+                if name == 'unless-stopped':
+                    rp['Name'] = 'always'; changed = True
     elif re.search(r"/containers/[^/]+/update(?=$|\?)", path):
         if isinstance(obj, dict):
             for k in STRIP_UPDATE:
                 if k in obj:
                     obj.pop(k, None); changed = True
+            rp = obj.get('RestartPolicy')
+            if isinstance(rp, dict):
+                name = (rp.get('Name') or '').strip()
+                if name == 'unless-stopped':
+                    rp['Name'] = 'always'; changed = True
     if changed:
         return json.dumps(obj, separators=(',',':')).encode('utf-8')
     return body
@@ -895,14 +874,6 @@ def autounit_async(cid, name_hint=None):
     def worker():
         try:
             name = name_hint or _inspect_name_root(cid)
-            try:
-                pol = _inspect_policy_root(cid)
-            except Exception:
-                pol = ''
-            # match on-failure and on-failure:N
-            pol_match = (pol in WANT_POLICIES) or (pol.startswith('on-failure') and 'on-failure' in WANT_POLICIES)
-            if not pol_match:
-                return
             try:
                 _run(['/usr/bin/podman','generate','systemd','--new','--name',name,'--files'])
             except Exception:
@@ -991,7 +962,6 @@ Wants=podman.socket
 Type=simple
 Environment=UPSTREAM_SOCK=$TARGET_SOCK
 Environment=AUTO_UNIT=$AUTOGEN_SYSTEMD_UNITS
-Environment=WANT_POLICIES=$AUTOGEN_MATCH_POLICY
 ExecStart=/usr/bin/python3 -u /usr/local/lib/podman-docker-filter-proxy.py
 Restart=always
 
