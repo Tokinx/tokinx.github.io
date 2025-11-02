@@ -421,20 +421,28 @@ if [[ "$AUTOGEN_SYSTEMD_UNITS" == "1" ]]; then
     names=$(bash -lc "$list_cmd" 2>/dev/null || true)
     [[ -n "$names" ]] || return 0
     for c in $names; do
-      local pol
+      local pol match
       pol=$(podman inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$c" 2>/dev/null || true)
+      match=0
       for want in $AUTOGEN_MATCH_POLICY; do
-        if [[ "$pol" == "$want" ]]; then
-          podman generate systemd --new --name "$c" --files >/dev/null 2>&1 || true
-          if [[ -f "container-$c.service" ]]; then
-            install -D -m 0644 "container-$c.service" "/etc/systemd/system/container-$c.service"
-            rm -f "container-$c.service"
-            systemctl daemon-reload || true
-            systemctl enable --now "container-$c.service" || true
-          fi
-          break
-        fi
+        if [[ "$pol" == "$want" ]]; then match=1; break; fi
+        if [[ "$want" == "on-failure" && ( "$pol" == on-failure:* || "$pol" == on-failure ) ]]; then match=1; break; fi
       done
+      if [[ "$match" -eq 1 ]]; then
+        work="$(mktemp -d)" || work="/tmp"
+        if ( cd "$work" && podman generate systemd --new --name "$c" --files >/dev/null 2>&1 ); then
+          :
+        else
+          # fallback to non --new for REST API created containers
+          ( cd "$work" && podman generate systemd --name "$c" --files >/dev/null 2>&1 ) || true
+        fi
+        if [[ -f "$work/container-$c.service" ]]; then
+          install -D -m 0644 "$work/container-$c.service" "/etc/systemd/system/container-$c.service"
+          systemctl daemon-reload || true
+          systemctl enable --now "container-$c.service" || true
+        fi
+        rm -rf "$work" || true
+      fi
     done
   }
   gen_for_list "podman ps -a --format '{{.Names}}'"
@@ -470,24 +478,31 @@ for n in $names; do
   pol=$(podman inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$n" 2>/dev/null || true)
   match=0
   for wp in $WANT_POLICIES; do
-    [[ "$pol" == "$wp" ]] && match=1 && break
+    if [[ "$pol" == "$wp" ]]; then match=1; break; fi
+    if [[ "$wp" == "on-failure" && ( "$pol" == on-failure:* || "$pol" == on-failure ) ]]; then match=1; break; fi
   done
   if [[ "$match" -eq 1 ]]; then
-    # 生成 service 文件（使用 --new/--name 与 --restart-policy=always）
-      if podman generate systemd --new --name "$n" --files >/dev/null 2>&1; then
-      if [[ -f "container-$n.service" ]]; then
-        dst="/etc/systemd/system/container-$n.service"
-        if [[ -f "$dst" ]] && cmp -s "container-$n.service" "$dst"; then
-          rm -f "container-$n.service"
-        else
-          install -D -m 0644 "container-$n.service" "$dst"
-          rm -f "container-$n.service"
-          changed=1
-          log "更新：container-$n.service"
-        fi
-        systemctl enable --now "container-$n.service" >/dev/null 2>&1 || true
-      fi
+    # 生成 service 文件到临时目录，再原子更新到 /etc/systemd/system
+    work="$(mktemp -d)" || work="/tmp"
+    # 首选 --new，如果失败（REST API 创建的容器），回退为非 --new
+    if ( cd "$work" && podman generate systemd --new --name "$n" --files >/dev/null 2>&1 ); then :; else
+      ( cd "$work" && podman generate systemd --name "$n" --files >/dev/null 2>&1 ) || true
     fi
+    src="$work/container-$n.service"
+    if [[ -f "$src" ]]; then
+      dst="/etc/systemd/system/container-$n.service"
+      if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
+        :
+      else
+        install -D -m 0644 "$src" "$dst"
+        changed=1
+        log "更新：container-$n.service"
+      fi
+      systemctl enable --now "container-$n.service" >/dev/null 2>&1 || true
+    else
+      warn "未找到生成的 unit：$src"
+    fi
+    rm -rf "$work" || true
   else
     # 不匹配：可选清理策略
     if [[ "$PRUNE_POLICY_MISMATCH" -eq 1 ]]; then
@@ -884,9 +899,14 @@ def autounit_async(cid, name_hint=None):
                 pol = _inspect_policy_root(cid)
             except Exception:
                 pol = ''
-            if pol not in WANT_POLICIES:
+            # match on-failure and on-failure:N
+            pol_match = (pol in WANT_POLICIES) or (pol.startswith('on-failure') and 'on-failure' in WANT_POLICIES)
+            if not pol_match:
                 return
-            _run(['/usr/bin/podman','generate','systemd','--new','--name',name,'--files'])
+            try:
+                _run(['/usr/bin/podman','generate','systemd','--new','--name',name,'--files'])
+            except Exception:
+                _run(['/usr/bin/podman','generate','systemd','--name',name,'--files'])
             svc_cand = f'container-{name}.service'
             if os.path.exists(svc_cand):
                 shutil.move(svc_cand, os.path.join('/etc/systemd/system', svc_cand))
