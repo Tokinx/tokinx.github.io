@@ -10,7 +10,7 @@ dns:
   enable: true
   ipv6: true
   prefer-h3: false
-  nameserver:
+  default-nameserver:
     - https://1.1.1.1/dns-query
     - https://8.8.8.8/dns-query
     - 1.1.1.1
