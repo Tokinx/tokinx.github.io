@@ -498,8 +498,9 @@ if [[ "$AUTOGEN_SYSTEMD_UNITS" == "1" ]]; then
     [[ -n "$names" ]] || return 0
     for c in $names; do
       work="$(mktemp -d)" || work="/tmp"
-      if ( cd "$work" && podman generate systemd --new --name "$c" --files >/dev/null 2>&1 ); then :; else
-        ( cd "$work" && podman generate systemd --name "$c" --files >/dev/null 2>&1 ) || true
+      # 优先非 --new，避免 ExecStartPre=rm -f 删除现存容器
+      if ( cd "$work" && podman generate systemd --name "$c" --files >/dev/null 2>&1 ); then :; else
+        ( cd "$work" && podman generate systemd --new --name "$c" --files >/dev/null 2>&1 ) || true
       fi
       if [[ -f "$work/container-$c.service" ]]; then
         install -D -m 0644 "$work/container-$c.service" "/etc/systemd/system/container-$c.service"
@@ -557,9 +558,9 @@ for n in $names; do
   case "${val,,}" in 1|true|yes) :;; *) continue;; esac
   # 生成 service 文件到临时目录，再原子更新到 /etc/systemd/system
   work="$(mktemp -d)" || work="/tmp"
-  # 首选 --new，如果失败（REST API 创建的容器），回退为非 --new
-  if ( cd "$work" && podman generate systemd --new --name "$n" --files >/dev/null 2>&1 ); then :; else
-    ( cd "$work" && podman generate systemd --name "$n" --files >/dev/null 2>&1 ) || true
+  # 优先非 --new（避免在启动前 rm -f 容器），失败再回退 --new
+  if ( cd "$work" && podman generate systemd --name "$n" --files >/dev/null 2>&1 ); then :; else
+    ( cd "$work" && podman generate systemd --new --name "$n" --files >/dev/null 2>&1 ) || true
   fi
   src="$work/container-$n.service"
   if [[ -f "$src" ]]; then
@@ -981,9 +982,10 @@ def autounit_async(cid, name_hint=None):
         try:
             name = name_hint or _inspect_name_root(cid)
             try:
-                _run(['/usr/bin/podman','generate','systemd','--new','--name',name,'--files'])
-            except Exception:
+                # 优先非 --new，避免在生成的 unit 中添加 ExecStartPre=rm -f
                 _run(['/usr/bin/podman','generate','systemd','--name',name,'--files'])
+            except Exception:
+                _run(['/usr/bin/podman','generate','systemd','--new','--name',name,'--files'])
             svc_cand = f'container-{name}.service'
             if os.path.exists(svc_cand):
                 shutil.move(svc_cand, os.path.join('/etc/systemd/system', svc_cand))
