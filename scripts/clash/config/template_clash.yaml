@@ -16,6 +16,11 @@ dns:
     - https://8.8.8.8/dns-query
     - 1.1.1.1
     - 8.8.8.8
+  nameserver:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+    - 1.1.1.1
+    - 8.8.8.8
   nameserver-policy:
     geosite:cn:
       - https://doh.pub/dns-query
