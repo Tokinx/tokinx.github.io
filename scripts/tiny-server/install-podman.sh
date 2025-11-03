@@ -24,11 +24,13 @@ DOCKER_API_FILTER_PROXY="${DOCKER_API_FILTER_PROXY:-1}"
 AUTOGEN_SYSTEMD_UNITS="${AUTOGEN_SYSTEMD_UNITS:-1}"
 # 定时扫描生成自启动（root 模式专用）：是否启用与间隔（分钟）
 ENABLE_PERIODIC_AUTOUNIT="${ENABLE_PERIODIC_AUTOUNIT:-1}"  # 1 启用 0 关闭
-AUTOUNIT_INTERVAL_MIN="${AUTOUNIT_INTERVAL_MIN:-1}"        # 每分钟扫描一次
+AUTOUNIT_INTERVAL_MIN="${AUTOUNIT_INTERVAL_MIN:-5}"        # 每 5 分钟扫描一次
 # 定时扫描清理策略（root 模式专用）：是否在以下情况下禁用/移除 unit
 # 注意：默认不清理，以免误删。按需开启。
 AUTOUNIT_PRUNE_MISSING_CONTAINER="${AUTOUNIT_PRUNE_MISSING_CONTAINER:-1}" # 1: 当系统中已不存在该容器名时，禁用对应 unit
 AUTOUNIT_REMOVE_UNIT_ON_PRUNE="${AUTOUNIT_REMOVE_UNIT_ON_PRUNE:-1}"    # 1: 清理时同时删除 unit 文件
+# 自动纳管的容器过滤标签（仅当容器带有该标签且值为 1/true/yes 时才会生成 systemd 单元）
+AUTOUNIT_FILTER_LABEL_KEY="${AUTOUNIT_FILTER_LABEL_KEY:-tss.autounit}"
 # ============================================
 
 log(){ echo -e "\033[1;32m[INFO]\033[0m $*"; }
@@ -96,7 +98,7 @@ if [[ "$INTERACTIVE" == "1" ]]; then
 
   DOCKER_ABS_PATH_DIVERT="$(ask_bool "拦截绝对路径 /usr/bin/docker（dpkg-divert）?" "$DOCKER_ABS_PATH_DIVERT")"
   DOCKER_API_FILTER_PROXY="$(ask_bool "在 /var/run/docker.sock 部署 API 过滤代理?" "$DOCKER_API_FILTER_PROXY")"
-  AUTOGEN_SYSTEMD_UNITS="$(ask_bool "自动为容器生成并启用 systemd 单元?" "$AUTOGEN_SYSTEMD_UNITS")"
+  AUTOGEN_SYSTEMD_UNITS="$(ask_bool "自动为容器生成并启用 systemd 单元(仅带标签 ${AUTOUNIT_FILTER_LABEL_KEY}=1)?" "$AUTOGEN_SYSTEMD_UNITS")"
   # 所有容器均纳管为自启动，不再询问重启策略匹配
 
   echo "\n== 配置摘要 =="
@@ -111,7 +113,7 @@ if [[ "$INTERACTIVE" == "1" ]]; then
   echo "Podman 参数剥离 wrapper: $([[ "$PODMAN_WRAPPER_STRIP" == 1 ]] && echo 启用 || echo 关闭)（剥离: $PODMAN_STRIP_FLAGS）"
   echo "拦截 /usr/bin/docker: $([[ "$DOCKER_ABS_PATH_DIVERT" == 1 ]] && echo 启用 || echo 关闭)"
   echo "Docker API 过滤代理: $([[ "$DOCKER_API_FILTER_PROXY" == 1 ]] && echo 启用 || echo 关闭)"
-  echo "自动生成 systemd 单元: $([[ "$AUTOGEN_SYSTEMD_UNITS" == 1 ]] && echo 启用 || echo 关闭)（纳管全部容器）"
+  echo "自动生成 systemd 单元: $([[ "$AUTOGEN_SYSTEMD_UNITS" == 1 ]] && echo 启用 || echo 关闭)（仅纳管带标签 ${AUTOUNIT_FILTER_LABEL_KEY}=1 的容器）"
   read -r -p "确认开始安装? [Y/n] " _go || true
   _go="${_go:-y}"; [[ "${_go,,}" == y* ]] || die "用户取消。"
 fi
@@ -201,30 +203,43 @@ fi
 
 translate_and_strip_args() {
   local out=()
-  local skip_next=0
-  for arg in "$@"; do
-    if [[ "$skip_next" -eq 1 ]]; then
-      skip_next=0
-      continue
-    fi
+  local i=1
+  local argc=$#
+  while (( i <= argc )); do
+    local arg
+    # shellcheck disable=SC1083
+    eval arg="\${$i}"
     local matched=0
-    # Translate --restart unless-stopped -> --restart always (Podman lacks unless-stopped)
+    # Normalize/translate --restart
     if [[ "$arg" == "--restart" ]]; then
-      skip_next=1
-      matched=1
+      (( i++ ))
+      local val
+      eval val="\${$i:-}"
+      case "$val" in
+        unless-stopped*) out+=("--restart=always"); matched=1;;
+        always|on-failure*) out+=("--restart=$val"); matched=1;;
+        *) [[ -n "$val" ]] && out+=("--restart=$val"); matched=1;;
+      esac
+      (( i++ ))
       continue
     fi
-    if [[ "$arg" == --restart=unless-stopped ]]; then
-      out+=("--restart=always"); matched=1; continue
-    fi
-    if [[ "$arg" == --restart=unless-stopped,* ]]; then
-      # e.g., unless-stopped:3 -> always (retry count irrelevant for always)
-      out+=("--restart=always"); matched=1; continue
+    if [[ "$arg" == --restart=* ]]; then
+      local val="${arg#--restart=}"
+      if [[ "$val" == unless-stopped* ]]; then
+        out+=("--restart=always")
+      else
+        out+=("--restart=$val")
+      fi
+      (( i++ ))
+      continue
     fi
     for f in "${STRIP_FLAGS[@]}"; do
       if [[ "$arg" == "$f" ]]; then
         matched=1
-        skip_next=1
+        (( i++ ))
+        # skip its value if any
+        eval next_val="\${$i:-}"
+        if [[ -n "$next_val" && "$next_val" != -* ]]; then (( i++ )); fi
         break
       fi
       if [[ "$arg" == "$f"=* ]]; then
@@ -232,8 +247,12 @@ translate_and_strip_args() {
         break
       fi
     done
-    [[ "$matched" -eq 1 ]] && continue
+    if [[ "$matched" -eq 1 ]]; then
+      (( i++ ))
+      continue
+    fi
     out+=("$arg")
+    (( i++ ))
   done
   printf '%s\n' "${out[@]}"
 }
@@ -272,6 +291,22 @@ if [[ "${1:-}" == "logs" ]]; then
   exec podman logs "${flags[@]}" "${containers[@]}"
 else
   mapfile -t _cleaned < <(translate_and_strip_args "$@")
+  # 自动为 run/create 且含 restart=always/on-failure/unless-stopped 的容器添加标签 tss.autounit=1（若未显式设置）
+  if [[ "${_cleaned[0]:-}" == "run" || "${_cleaned[0]:-}" == "create" ]]; then
+    need_label=0
+    has_label=0
+    for a in "${_cleaned[@]}"; do
+      case "$a" in
+        --label=*tss.autounit=*) has_label=1;;
+        -l=*tss.autounit=*) has_label=1;;
+        --label| -l) has_label=1;;
+        --restart=always|--restart=on-failure* ) need_label=1;;
+      esac
+    done
+    if [[ "$need_label" -eq 1 && "$has_label" -eq 0 ]]; then
+      _cleaned+=("--label=tss.autounit=1")
+    fi
+  fi
   exec podman "${_cleaned[@]}"
 fi
 EOWRAP
@@ -384,6 +419,30 @@ for arg in "$@"; do
   args+=("$arg")
 done
 
+# Normalize unsupported restart value for Podman
+for i in "${!args[@]}"; do
+  if [[ "${args[$i]}" == "--restart=unless-stopped"* ]]; then
+    args[$i]="--restart=always"
+  fi
+done
+
+# 自动为 run/create 且含 restart=always/on-failure/unless-stopped 的容器添加标签 tss.autounit=1（若未显式设置）
+if [[ "${args[0]:-}" == "run" || "${args[0]:-}" == "create" ]]; then
+  need_label=0
+  has_label=0
+  for a in "${args[@]}"; do
+    case "$a" in
+      --label=*tss.autounit=*) has_label=1;;
+      -l=*tss.autounit=*) has_label=1;;
+      --label| -l) has_label=1;;
+      --restart=always|--restart=on-failure*|--restart=unless-stopped* ) need_label=1;;
+    esac
+  done
+  if [[ "$need_label" -eq 1 && "$has_label" -eq 0 ]]; then
+    args+=("--label=tss.autounit=1")
+  fi
+fi
+
 exec /usr/bin/podman "${args[@]}"
 EOWRAP
     chmod +x /usr/local/bin/podman
@@ -425,6 +484,16 @@ if [[ "$AUTOGEN_SYSTEMD_UNITS" == "1" ]]; then
   gen_for_list(){
     local list_cmd="$1";
     local names
+    # 预先为符合重启策略的容器自动打标签（always/on-failure/unless-stopped）
+    for n in $(podman ps -a --format '{{.Names}}' 2>/dev/null || true); do
+      val=$(podman inspect -f "{{index .Config.Labels \"${AUTOUNIT_FILTER_LABEL_KEY}\"}}" "$n" 2>/dev/null || true)
+      case "${val,,}" in 0|false|no) ;; *)
+        rp=$(podman inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$n" 2>/dev/null || true)
+        case "$rp" in
+          always|on-failure*|unless-stopped*) podman container update --label-add "${AUTOUNIT_FILTER_LABEL_KEY}=1" "$n" >/dev/null 2>&1 || true;;
+        esac
+      esac
+    done
     names=$(bash -lc "$list_cmd" 2>/dev/null || true)
     [[ -n "$names" ]] || return 0
     for c in $names; do
@@ -440,14 +509,15 @@ if [[ "$AUTOGEN_SYSTEMD_UNITS" == "1" ]]; then
       rm -rf "$work" || true
     done
   }
-  gen_for_list "podman ps -a --format '{{.Names}}'"
+  # 仅纳管带指定标签的容器
+  gen_for_list "podman ps -a --filter label=${AUTOUNIT_FILTER_LABEL_KEY}=1 --format '{{.Names}}'"
 else
   log "跳过现有容器 systemd 单元生成（AUTOGEN_SYSTEMD_UNITS=0）。"
 fi
 
 # ========== root 模式定时扫描：为符合策略容器生成/启用自启动单元 ==========
 if [[ "$ENABLE_PERIODIC_AUTOUNIT" == "1" ]]; then
-  log "安装 root 定时任务：每 ${AUTOUNIT_INTERVAL_MIN} 分钟扫描一次，为所有容器生成/启用自启动..."
+  log "安装 root 定时任务：每 ${AUTOUNIT_INTERVAL_MIN} 分钟扫描一次，为带标签 ${AUTOUNIT_FILTER_LABEL_KEY}=1 的容器生成/启用自启动..."
   install -d -m 0755 /usr/local/sbin
   cat >/usr/local/sbin/podman-autounit-root.sh <<'EOSH'
 #!/usr/bin/env bash
@@ -462,11 +532,29 @@ command -v podman >/dev/null || { warn "podman 不存在，退出"; exit 0; }
 PRUNE_MISSING_CONTAINER=__PRUNE_MISSING_CONTAINER__
 REMOVE_UNIT_ON_PRUNE=__REMOVE_UNIT_ON_PRUNE__
 
-# 收集所有容器名称
-names=$(podman ps -a --format '{{.Names}}' 2>/dev/null || true)
+# 过滤标签键，安装时注入
+FILTER_LABEL_KEY=__FILTER_LABEL_KEY__
+
+# 为具有重启策略的容器自动打标签（always/on-failure/unless-stopped）
+candidates=$(podman ps -a --format '{{.Names}}' 2>/dev/null || true)
+for n in $candidates; do
+  # 已经显式关闭（值为 0/false/no）则不动
+  val=$(podman inspect -f "{{index .Config.Labels \"${FILTER_LABEL_KEY}\"}}" "$n" 2>/dev/null || true)
+  case "${val,,}" in 0|false|no) continue;; esac
+  rp=$(podman inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$n" 2>/dev/null || true)
+  case "$rp" in
+    always|on-failure*|unless-stopped*) podman container update --label-add "${FILTER_LABEL_KEY}=1" "$n" >/dev/null 2>&1 || true;;
+  esac
+done
+
+# 收集带过滤标签（值为 1/true/yes）的容器名称
+names=$(podman ps -a --filter label=${FILTER_LABEL_KEY}=1 --format '{{.Names}}' 2>/dev/null || true)
 
 changed=0
 for n in $names; do
+  # 二次校验标签值是否为 1/true/yes
+  val=$(podman inspect -f "{{index .Config.Labels \"${FILTER_LABEL_KEY}\"}}" "$n" 2>/dev/null || true)
+  case "${val,,}" in 1|true|yes) :;; *) continue;; esac
   # 生成 service 文件到临时目录，再原子更新到 /etc/systemd/system
   work="$(mktemp -d)" || work="/tmp"
   # 首选 --new，如果失败（REST API 创建的容器），回退为非 --new
@@ -523,6 +611,7 @@ EOSH
   sed -i \
     -e "s|__PRUNE_MISSING_CONTAINER__|$AUTOUNIT_PRUNE_MISSING_CONTAINER|g" \
     -e "s|__REMOVE_UNIT_ON_PRUNE__|$AUTOUNIT_REMOVE_UNIT_ON_PRUNE|g" \
+    -e "s|__FILTER_LABEL_KEY__|$AUTOUNIT_FILTER_LABEL_KEY|g" \
     /usr/local/sbin/podman-autounit-root.sh
   chmod +x /usr/local/sbin/podman-autounit-root.sh
 
@@ -731,6 +820,7 @@ import os, sys, socket, threading, json, re, grp, subprocess, urllib.parse, temp
 UPSTREAM = os.environ.get('UPSTREAM_SOCK', '')
 LISTEN = '/var/run/docker.sock'
 AUTO_UNIT = os.environ.get('AUTO_UNIT', '1') == '1'
+AUTO_UNIT_LABEL_KEY = os.environ.get('AUTO_UNIT_LABEL_KEY', 'tss.autounit')
 PROXY_LOG = os.environ.get('PROXY_LOG', '0') == '1'
 
 STRIP_CREATE = {
@@ -813,6 +903,22 @@ def rewrite(path, body):
                 name = (rp.get('Name') or '').strip()
                 if name == 'unless-stopped':
                     rp['Name'] = 'always'; changed = True
+            # Auto label for restart policies always/on-failure/unless-stopped
+            try:
+                labels = obj.get('Labels') or {}
+                if not isinstance(labels, dict):
+                    labels = {}
+                rname = ''
+                if isinstance(hc.get('RestartPolicy'), dict):
+                    rname = (hc['RestartPolicy'].get('Name') or '').strip()
+                if rname in ('always','on-failure','unless-stopped'):
+                    v = str(labels.get(AUTO_UNIT_LABEL_KEY,'')).strip().lower()
+                    if v not in ('1','true','yes'):
+                        labels[AUTO_UNIT_LABEL_KEY] = '1'
+                        obj['Labels'] = labels
+                        changed = True
+            except Exception:
+                pass
     elif re.search(r"/containers/[^/]+/update(?=$|\?)", path):
         if isinstance(obj, dict):
             for k in STRIP_UPDATE:
@@ -888,6 +994,19 @@ def autounit_async(cid, name_hint=None):
                 sys.stderr.write('[proxy] autounit failed: %s\n' % e)
     threading.Thread(target=worker, daemon=True).start()
 
+def _has_autounit_label(path, body):
+    try:
+        if re.search(r"/containers/create(?=$|\?)", path):
+            obj = json.loads(body.decode('utf-8') or 'null')
+            if isinstance(obj, dict):
+                labels = obj.get('Labels') or {}
+                if isinstance(labels, dict):
+                    v = str(labels.get(AUTO_UNIT_LABEL_KEY, '')).strip().lower()
+                    return v in ('1','true','yes')
+    except Exception:
+        return False
+    return False
+
 def handle(c):
     try:
         reqline, headers, rest = read_headers(c)
@@ -901,19 +1020,21 @@ def handle(c):
         if method in ('POST','PUT','PATCH'):
             body = rewrite(path, body)
         resp = forward(reqline, headers, body)
-        # autounit on successful create
+        # autounit on successful create (only if label present)
         if AUTO_UNIT and method == 'POST' and re.search(r"/containers/create(?=$|\?)", path):
             try:
-                head, _, tail = resp.partition(b"\r\n\r\n")
-                status = head.split(b"\r\n",1)[0]
-                if b" 201 " in status:
-                    j = json.loads(tail.decode('utf-8'))
-                    cid = j.get('Id') or j.get('id')
-                    parsed = urllib.parse.urlparse(path)
-                    q = urllib.parse.parse_qs(parsed.query or '')
-                    name_hint = q.get('name',[None])[0]
-                    if cid:
-                        autounit_async(cid, name_hint)
+                # ensure request had the autounit label, otherwise skip
+                if _has_autounit_label(path, body):
+                    head, _, tail = resp.partition(b"\r\n\r\n")
+                    status = head.split(b"\r\n",1)[0]
+                    if b" 201 " in status:
+                        j = json.loads(tail.decode('utf-8'))
+                        cid = j.get('Id') or j.get('id')
+                        parsed = urllib.parse.urlparse(path)
+                        q = urllib.parse.parse_qs(parsed.query or '')
+                        name_hint = q.get('name',[None])[0]
+                        if cid:
+                            autounit_async(cid, name_hint)
             except Exception as e:
                 if PROXY_LOG:
                     sys.stderr.write('[proxy] parse create resp failed: %s\n' % e)
@@ -962,6 +1083,7 @@ Wants=podman.socket
 Type=simple
 Environment=UPSTREAM_SOCK=$TARGET_SOCK
 Environment=AUTO_UNIT=$AUTOGEN_SYSTEMD_UNITS
+Environment=AUTO_UNIT_LABEL_KEY=$AUTOUNIT_FILTER_LABEL_KEY
 ExecStart=/usr/bin/python3 -u /usr/local/lib/podman-docker-filter-proxy.py
 Restart=always
 
