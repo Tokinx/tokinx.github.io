@@ -299,12 +299,40 @@ else
       case "$a" in
         --label=*tss.autounit=*) has_label=1;;
         -l=*tss.autounit=*) has_label=1;;
-        --label| -l) has_label=1;;
-        --restart=always|--restart=on-failure* ) need_label=1;;
+        --label|-l) has_label=1;;
+        --restart=always|--restart=on-failure*|--restart=unless-stopped* ) need_label=1;;
       esac
     done
     if [[ "$need_label" -eq 1 && "$has_label" -eq 0 ]]; then
-      _cleaned+=("--label=tss.autounit=1")
+      # 计算插入点：位于镜像名之前（第一个非选项，或 -- 之后的第一个参数）
+      insert_idx=${#_cleaned[@]}
+      # 标记接受值的参数
+      with_val=(--name --env -e --label -l --volume -v --publish -p --restart --entrypoint --hostname -h --user -u --network --ip --dns --add-host)
+      expect_val=0
+      for i in "${!_cleaned[@]}"; do
+        arg="${_cleaned[$i]}"
+        # 跳过子命令本身
+        [[ $i -eq 0 ]] && continue
+        if [[ "$arg" == "--" ]]; then
+          insert_idx=$((i+1)); break
+        fi
+        if [[ $expect_val -eq 1 ]]; then
+          expect_val=0; continue
+        fi
+        if [[ "$arg" == --* || "$arg" == -* ]]; then
+          # 选项是否需要值
+          for w in "${with_val[@]}"; do
+            if [[ "$arg" == "$w" ]]; then expect_val=1; break; fi
+          done
+          continue
+        else
+          insert_idx=$i; break
+        fi
+      done
+      # 构造插入后的参数数组
+      _pref=("${_cleaned[@]:0:$insert_idx}")
+      _suff=("${_cleaned[@]:$insert_idx}")
+      _cleaned=("${_pref[@]}" "--label=tss.autounit=1" "${_suff[@]}")
     fi
   fi
   exec podman "${_cleaned[@]}"
@@ -434,12 +462,32 @@ if [[ "${args[0]:-}" == "run" || "${args[0]:-}" == "create" ]]; then
     case "$a" in
       --label=*tss.autounit=*) has_label=1;;
       -l=*tss.autounit=*) has_label=1;;
-      --label| -l) has_label=1;;
+      --label|-l) has_label=1;;
       --restart=always|--restart=on-failure*|--restart=unless-stopped* ) need_label=1;;
     esac
   done
   if [[ "$need_label" -eq 1 && "$has_label" -eq 0 ]]; then
-    args+=("--label=tss.autounit=1")
+    # 计算插入点：位于镜像名之前（第一个非选项，或 -- 之后的第一个参数）
+    insert_idx=${#args[@]}
+    with_val=(--name --env -e --label -l --volume -v --publish -p --restart --entrypoint --hostname -h --user -u --network --ip --dns --add-host)
+    expect_val=0
+    for i in "${!args[@]}"; do
+      arg="${args[$i]}"
+      [[ $i -eq 0 ]] && continue
+      if [[ "$arg" == "--" ]]; then insert_idx=$((i+1)); break; fi
+      if [[ $expect_val -eq 1 ]]; then expect_val=0; continue; fi
+      if [[ "$arg" == --* || "$arg" == -* ]]; then
+        for w in "${with_val[@]}"; do
+          if [[ "$arg" == "$w" ]]; then expect_val=1; break; fi
+        done
+        continue
+      else
+        insert_idx=$i; break
+      fi
+    done
+    prefix=("${args[@]:0:$insert_idx}")
+    suffix=("${args[@]:$insert_idx}")
+    args=("${prefix[@]}" "--label=tss.autounit=1" "${suffix[@]}")
   fi
 fi
 
