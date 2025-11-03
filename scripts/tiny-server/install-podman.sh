@@ -520,7 +520,8 @@ fi
 if [[ "$SOCKET_ENABLED" == "1" ]]; then
   TARGET_SOCK="/run/podman/podman.sock"
   DOCKER_HOST_LINE="export DOCKER_HOST=unix://$TARGET_SOCK"
-  grep -q "$DOCKER_HOST_LINE" /root/.bashrc || echo "$DOCKER_HOST_LINE" >>/root/.bashrc
+  grep -q "^export DOCKER_HOST=" /root/.bashrc 2>/dev/null && sed -i -E 's|^export DOCKER_HOST=.*||' /root/.bashrc || true
+  echo "$DOCKER_HOST_LINE" >>/root/.bashrc
   echo "$DOCKER_HOST_LINE" >/etc/profile.d/podman-docker-host.sh
 else
   TARGET_SOCK=""  # 不设置 DOCKER_HOST，避免误导
@@ -1143,6 +1144,13 @@ EOF
 
     systemctl daemon-reload || true
     systemctl enable --now docker-proxy.service || true
+
+    # 当代理启用时，强制将 DOCKER_HOST 指向代理的 docker.sock，确保 docker-compose 等总走代理
+    PROXY_DOCKER_HOST_LINE="export DOCKER_HOST=unix:///var/run/docker.sock"
+    # 清理之前设置的 DOCKER_HOST 冲突项
+    sed -i -E 's|^export DOCKER_HOST=.*||' /root/.bashrc 2>/dev/null || true
+    echo "$PROXY_DOCKER_HOST_LINE" >>/root/.bashrc
+    echo "$PROXY_DOCKER_HOST_LINE" >/etc/profile.d/docker-host-proxy.sh
   fi
 else
   # 可选软链
@@ -1205,8 +1213,12 @@ else
   warn "非 systemd 环境或 systemctl 不可用，跳过重启 Podman。"
 fi
 
-if [[ -n "$TARGET_SOCK" ]]; then
-  log "完成。DOCKER_HOST=unix://$TARGET_SOCK"
+if systemctl list-units --type=service --no-legend 2>/dev/null | grep -q '\bdocker-proxy.service\b'; then
+  log "完成。DOCKER_HOST=unix:///var/run/docker.sock（代理启用）"
 else
-  log "完成。未设置 DOCKER_HOST（在无 systemd 环境下仍可直接使用 podman/docker 兼容命令）"
+  if [[ -n "$TARGET_SOCK" ]]; then
+    log "完成。DOCKER_HOST=unix://$TARGET_SOCK"
+  else
+    log "完成。未设置 DOCKER_HOST（在无 systemd 环境下仍可直接使用 podman/docker 兼容命令）"
+  fi
 fi
