@@ -170,6 +170,7 @@ rules:
   - GEOSITE,bilibili,DIRECT
   - GEOSITE,category-games@cn,DIRECT
   # 其它平台与区域
+  - GEOSITE,github,默认节点
   - GEOSITE,microsoft,Microsoft
   - GEOSITE,apple,Apple
   - GEOSITE,onedrive,Microsoft
