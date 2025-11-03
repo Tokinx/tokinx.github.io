@@ -10,46 +10,23 @@ unified-delay: true
 dns:
   enable: true
   ipv6: true
-  prefer-h3: true
-  enhanced-mode: fake-ip
-  fake-ip-range: 198.18.0.0/16
-  fake-ip-filter:
-    - '*.lan'
-    - '*.local'
-    - '*.localhost'
-    - 'time.*'
-    - 'ntp.*'
-    - 'stun.*'
-    - 'msftconnecttest.com'
-    - 'msftncsi.com'
-  default-nameserver:
-    - 223.5.5.5
-    - 119.29.29.29
+  prefer-h3: false
   nameserver:
     - https://1.1.1.1/dns-query
-    - https://dns.google/dns-query
-    - https://dns.quad9.net/dns-query
+    - https://8.8.8.8/dns-query
     - 1.1.1.1
     - 8.8.8.8
-  fallback:
-    - https://dns.google/dns-query
-    - https://security.cloudflare-dns.com/dns-query
-    - https://1.0.0.1/dns-query
-  fallback-filter:
-    geoip: true
-    geoip-code: CN
-    domain:
-      - '+.google.com'
-      - '+.facebook.com'
-      - '+.youtube.com'
-      - '+.github.com'
   nameserver-policy:
     geosite:cn:
       - https://doh.pub/dns-query
       - https://dns.alidns.com/dns-query
+      - https://1.12.12.12/dns-query
+      - https://223.5.5.5/dns-query
   proxy-server-nameserver:
-    - https://1.1.1.1/dns-query
-    - https://dns.google/dns-query
+    - https://doh.pub/dns-query
+    - https://dns.alidns.com/dns-query
+    - https://1.12.12.12/dns-query
+    - https://223.5.5.5/dns-query
 
 sniffer:
   enable: true
@@ -83,71 +60,51 @@ sniffer:
 proxies:
 
 proxy-groups:
-  - name: 节点选择
-    type: select
-    proxies:
-      - <countries>
-      - 手动切换
-      - DIRECT
-  - name: 手动切换
+  - name: 默认节点
     type: select
     proxies:
       - <all>
-  - name: 游戏平台（中国）
+  - name: AI代理
     type: select
     proxies:
-      - 节点选择
+      - 默认节点
+      - <all>
       - <countries>
-      - 手动切换
       - DIRECT
-  - name: 游戏平台（全球）
+  - name: 游戏平台
     type: select
     proxies:
-      - 节点选择
+      - 默认节点
+      - <all>
       - <countries>
-      - 手动切换
-      - DIRECT
-  - name: 哔哩哔哩
-    type: select
-    proxies:
-      - 节点选择
-      - <countries>
-      - 手动切换
       - DIRECT
   - name: Telegram
     type: select
     proxies:
-      - 节点选择
+      - 默认节点
+      - <all>
       - <countries>
-      - 手动切换
-      - DIRECT
-  - name: AI 专用代理
-    type: select
-    proxies:
-      - 节点选择
-      - <countries>
-      - 手动切换
       - DIRECT
   - name: Youtube
     type: select
     proxies:
-      - 节点选择
+      - 默认节点
+      - <all>
       - <countries>
-      - 手动切换
       - DIRECT
   - name: Microsoft
     type: select
     proxies:
-      - 节点选择
+      - 默认节点
+      - <all>
       - <countries>
-      - 手动切换
       - DIRECT
   - name: Apple
     type: select
     proxies:
-      - 节点选择
+      - 默认节点
+      - <all>
       - <countries>
-      - 手动切换
       - DIRECT
   - name: 广告拦截
     type: select
@@ -157,64 +114,65 @@ proxy-groups:
   - name: 漏网之鱼
     type: select
     proxies:
-      - 节点选择
+      - 默认节点
+      - <all>
       - <countries>
-      - 手动切换
       - DIRECT
 
 rules:
   - GEOSITE,private,DIRECT,no-resolve
   - GEOIP,private,DIRECT
   - GEOSITE,category-ads-all,广告拦截
+  # AI代理（优先生效）
+  - GEOSITE,openai,AI代理
+  - DOMAIN-SUFFIX,openai.com,AI代理
+  - DOMAIN-SUFFIX,chatgpt.com,AI代理
+  - DOMAIN-KEYWORD,openai,AI代理
+  - DOMAIN-SUFFIX,gemini.google.com,AI代理
+  - DOMAIN-SUFFIX,aistudio.google.com,AI代理
+  - DOMAIN-SUFFIX,ai.google.dev,AI代理
+  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,AI代理
+  - DOMAIN-SUFFIX,makersuite.google.com,AI代理
+  - DOMAIN-SUFFIX,x.ai,AI代理
+  - DOMAIN-SUFFIX,grok.x.ai,AI代理
+  - DOMAIN-KEYWORD,grok,AI代理
+  - DOMAIN-SUFFIX,anthropic.com,AI代理
+  - DOMAIN-SUFFIX,api.anthropic.com,AI代理
+  - DOMAIN-SUFFIX,claude.ai,AI代理
+  - DOMAIN-KEYWORD,claude,AI代理
+  - DOMAIN-SUFFIX,perplexity.ai,AI代理
+  - DOMAIN-SUFFIX,api.perplexity.ai,AI代理
+  - DOMAIN-SUFFIX,pplx.ai,AI代理
+  - DOMAIN-SUFFIX,cohere.com,AI代理
+  - DOMAIN-SUFFIX,cohere.ai,AI代理
+  - DOMAIN-SUFFIX,api.cohere.ai,AI代理
+  - DOMAIN-SUFFIX,mistral.ai,AI代理
+  - DOMAIN-SUFFIX,api.mistral.ai,AI代理
+  - DOMAIN-SUFFIX,together.ai,AI代理
+  - DOMAIN-SUFFIX,together.xyz,AI代理
+  - DOMAIN-SUFFIX,api.together.xyz,AI代理
+  - DOMAIN-SUFFIX,openrouter.ai,AI代理
+  - DOMAIN-SUFFIX,api.openrouter.ai,AI代理
+  - DOMAIN-SUFFIX,huggingface.co,AI代理
+  - DOMAIN-SUFFIX,api-inference.huggingface.co,AI代理
+  - DOMAIN-SUFFIX,stability.ai,AI代理
+  - DOMAIN-SUFFIX,api.stability.ai,AI代理
+  - DOMAIN-SUFFIX,replicate.com,AI代理
+  - DOMAIN-SUFFIX,replicate.ai,AI代理
+  - DOMAIN-SUFFIX,api.replicate.com,AI代理
+  - DOMAIN-SUFFIX,copilot.microsoft.com,AI代理
+  # 始终直连
+  - GEOSITE,bilibili,DIRECT
+  - GEOSITE,category-games@cn,DIRECT
+  # 其它平台与区域
   - GEOSITE,microsoft,Microsoft
   - GEOSITE,apple,Apple
   - GEOSITE,onedrive,Microsoft
   - GEOSITE,youtube,Youtube
   - GEOSITE,telegram,Telegram
   - GEOIP,telegram,Telegram
-  - GEOSITE,openai,AI 专用代理
-  # AI 专用代理直匹配域名
-  - DOMAIN-SUFFIX,openai.com,AI 专用代理
-  - DOMAIN-SUFFIX,chatgpt.com,AI 专用代理
-  - DOMAIN-KEYWORD,openai,AI 专用代理
-  - DOMAIN-SUFFIX,gemini.google.com,AI 专用代理
-  - DOMAIN-SUFFIX,aistudio.google.com,AI 专用代理
-  - DOMAIN-SUFFIX,ai.google.dev,AI 专用代理
-  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,AI 专用代理
-  - DOMAIN-SUFFIX,makersuite.google.com,AI 专用代理
-  - DOMAIN-SUFFIX,x.ai,AI 专用代理
-  - DOMAIN-SUFFIX,grok.x.ai,AI 专用代理
-  - DOMAIN-KEYWORD,grok,AI 专用代理
-  - DOMAIN-SUFFIX,anthropic.com,AI 专用代理
-  - DOMAIN-SUFFIX,api.anthropic.com,AI 专用代理
-  - DOMAIN-SUFFIX,claude.ai,AI 专用代理
-  - DOMAIN-KEYWORD,claude,AI 专用代理
-  - DOMAIN-SUFFIX,perplexity.ai,AI 专用代理
-  - DOMAIN-SUFFIX,api.perplexity.ai,AI 专用代理
-  - DOMAIN-SUFFIX,pplx.ai,AI 专用代理
-  - DOMAIN-SUFFIX,cohere.com,AI 专用代理
-  - DOMAIN-SUFFIX,cohere.ai,AI 专用代理
-  - DOMAIN-SUFFIX,api.cohere.ai,AI 专用代理
-  - DOMAIN-SUFFIX,mistral.ai,AI 专用代理
-  - DOMAIN-SUFFIX,api.mistral.ai,AI 专用代理
-  - DOMAIN-SUFFIX,together.ai,AI 专用代理
-  - DOMAIN-SUFFIX,together.xyz,AI 专用代理
-  - DOMAIN-SUFFIX,api.together.xyz,AI 专用代理
-  - DOMAIN-SUFFIX,openrouter.ai,AI 专用代理
-  - DOMAIN-SUFFIX,api.openrouter.ai,AI 专用代理
-  - DOMAIN-SUFFIX,huggingface.co,AI 专用代理
-  - DOMAIN-SUFFIX,api-inference.huggingface.co,AI 专用代理
-  - DOMAIN-SUFFIX,stability.ai,AI 专用代理
-  - DOMAIN-SUFFIX,api.stability.ai,AI 专用代理
-  - DOMAIN-SUFFIX,replicate.com,AI 专用代理
-  - DOMAIN-SUFFIX,replicate.ai,AI 专用代理
-  - DOMAIN-SUFFIX,api.replicate.com,AI 专用代理
-  # 其它平台与区域
-  - GEOSITE,bilibili,哔哩哔哩
-  - GEOSITE,category-games@cn,游戏平台（中国）
-  - GEOSITE,category-games,游戏平台（全球）
-  - GEOSITE,geolocation-!cn,节点选择
+  - GEOSITE,category-games,游戏平台
+  - GEOSITE,geolocation-!cn,默认节点
   - GEOSITE,CN,DIRECT
   - GEOIP,CN,DIRECT
   - MATCH,漏网之鱼
-
