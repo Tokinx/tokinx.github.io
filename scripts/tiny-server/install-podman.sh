@@ -1009,11 +1009,11 @@ def forward(reqline, headers, body):
     s.close()
     return b''.join(chunks)
 
-def _run(cmd, env=None):
+def _run(cmd, env=None, cwd=None):
     try:
         if PROXY_LOG:
             sys.stderr.write('[proxy] run: %s\n' % ' '.join(cmd))
-        subprocess.run(cmd, check=True, env=env)
+        subprocess.run(cmd, check=True, env=env, cwd=cwd)
     except Exception as e:
         if PROXY_LOG:
             sys.stderr.write('[proxy] cmd failed: %s\n' % e)
@@ -1030,16 +1030,21 @@ def autounit_async(cid, name_hint=None):
     def worker():
         try:
             name = name_hint or _inspect_name_root(cid)
+            workdir = tempfile.mkdtemp(prefix='podman-gen-')
             try:
                 # 优先非 --new，避免在生成的 unit 中添加 ExecStartPre=rm -f
-                _run(['/usr/bin/podman','generate','systemd','--name',name,'--files'])
+                _run(['/usr/bin/podman','generate','systemd','--name',name,'--files'], cwd=workdir)
             except Exception:
-                _run(['/usr/bin/podman','generate','systemd','--new','--name',name,'--files'])
-            svc_cand = f'container-{name}.service'
+                _run(['/usr/bin/podman','generate','systemd','--new','--name',name,'--files'], cwd=workdir)
+            svc_cand = os.path.join(workdir, f'container-{name}.service')
             if os.path.exists(svc_cand):
-                shutil.move(svc_cand, os.path.join('/etc/systemd/system', svc_cand))
+                shutil.move(svc_cand, os.path.join('/etc/systemd/system', f'container-{name}.service'))
             _run(['systemctl','daemon-reload'])
-            _run(['systemctl','enable','--now',svc_cand])
+            _run(['systemctl','enable','--now',f'container-{name}.service'])
+            try:
+                shutil.rmtree(workdir)
+            except Exception:
+                pass
         except Exception as e:
             if PROXY_LOG:
                 sys.stderr.write('[proxy] autounit failed: %s\n' % e)
@@ -1144,6 +1149,8 @@ EOF
 
     systemctl daemon-reload || true
     systemctl enable --now docker-proxy.service || true
+    # 强制重启以确保新的代理脚本生效
+    systemctl restart docker-proxy.service || true
 
     # 当代理启用时，强制将 DOCKER_HOST 指向代理的 docker.sock，确保 docker-compose 等总走代理
     PROXY_DOCKER_HOST_LINE="export DOCKER_HOST=unix:///var/run/docker.sock"
