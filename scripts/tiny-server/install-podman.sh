@@ -500,18 +500,25 @@ EOWRAP
   fi
 
 TARGET_SOCK=""
-# 仅在 systemd 存在且有 podman.socket 时启用 socket
+# 仅在 systemd 存在时尝试启用 podman.socket；检测更稳健（cat/文件存在性兜底）
 SOCKET_ENABLED=0
 if [[ "$(ps -p 1 -o comm= --no-headers)" == "systemd" ]] && command -v systemctl >/dev/null; then
-  if systemctl list-unit-files | grep -q '^podman\.socket'; then
-    log "启用系统级 podman.socket..."
-    if systemctl enable --now podman.socket; then
-      SOCKET_ENABLED=1
-    else
-      warn "启用 podman.socket 失败，跳过设置 DOCKER_HOST。"
-    fi
+  log "检查/启用 podman.socket..."
+  # 直接尝试启用；即使此前未列在 list-unit-files，只要单元存在即可成功
+  if systemctl enable --now podman.socket >/dev/null 2>&1; then
+    :
   else
-    warn "未发现 podman.socket 单元，跳过设置 DOCKER_HOST。"
+    # 若失败，判断单元文件是否存在；存在则再尝试一次 daemon-reload + enable
+    if [[ -f /lib/systemd/system/podman.socket || -f /usr/lib/systemd/system/podman.socket ]]; then
+      systemctl daemon-reload || true
+      systemctl enable --now podman.socket >/dev/null 2>&1 || true
+    fi
+  fi
+  # 最终以 is-active 或 sock 文件存在作为启用结果
+  if systemctl is-active podman.socket >/dev/null 2>&1 || [[ -S /run/podman/podman.sock ]]; then
+    SOCKET_ENABLED=1
+  else
+    warn "podman.socket 未能启用，跳过设置 DOCKER_HOST。"
   fi
 else
   warn "PID1 非 systemd 或 systemctl 不可用，跳过启用 podman.socket。"
