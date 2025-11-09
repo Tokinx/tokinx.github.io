@@ -155,64 +155,63 @@ rule-providers:
     path: ./ruleset/ChinaMax.yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax/ChinaMax.yaml
     interval: 86400
-
-  rules:
-    # 局域网与常见私有网段直连
-    - RULE-SET,LAN,DIRECT
-    # 广告拦截（与 AdGuard 分组对齐）
-    - RULE-SET,Advertising,AdGuard
-    # 编程相关流量
-    - DOMAIN-SUFFIX,openai.com,Coding
-    - DOMAIN-SUFFIX,chatgpt.com,Coding
-    - DOMAIN-KEYWORD,openai,Coding
-    - DOMAIN-SUFFIX,gemini.google.com,Coding
-    - DOMAIN-SUFFIX,aistudio.google.com,Coding
-    - DOMAIN-SUFFIX,ai.google.dev,Coding
-    - DOMAIN-SUFFIX,generativelanguage.googleapis.com,Coding
-    - DOMAIN-SUFFIX,makersuite.google.com,Coding
-    - DOMAIN-SUFFIX,x.ai,Coding
-    - DOMAIN-SUFFIX,grok.x.ai,Coding
-    - DOMAIN-KEYWORD,grok,Coding
-    - DOMAIN-SUFFIX,anthropic.com,Coding
-    - DOMAIN-SUFFIX,api.anthropic.com,Coding
-    - DOMAIN-SUFFIX,claude.ai,Coding
-    - DOMAIN-KEYWORD,claude,Coding
-    - DOMAIN-SUFFIX,perplexity.ai,Coding
-    - DOMAIN-SUFFIX,api.perplexity.ai,Coding
-    - DOMAIN-SUFFIX,pplx.ai,Coding
-    - DOMAIN-SUFFIX,cohere.com,Coding
-    - DOMAIN-SUFFIX,cohere.ai,Coding
-    - DOMAIN-SUFFIX,api.cohere.ai,Coding
-    - DOMAIN-SUFFIX,mistral.ai,Coding
-    - DOMAIN-SUFFIX,api.mistral.ai,Coding
-    - DOMAIN-SUFFIX,together.ai,Coding
-    - DOMAIN-SUFFIX,together.xyz,Coding
-    - DOMAIN-SUFFIX,api.together.xyz,Coding
-    - DOMAIN-SUFFIX,openrouter.ai,Coding
-    - DOMAIN-SUFFIX,api.openrouter.ai,Coding
-    - DOMAIN-SUFFIX,huggingface.co,Coding
-    - DOMAIN-SUFFIX,api-inference.huggingface.co,Coding
-    - DOMAIN-SUFFIX,stability.ai,Coding
-    - DOMAIN-SUFFIX,api.stability.ai,Coding
-    - DOMAIN-SUFFIX,replicate.com,Coding
-    - DOMAIN-SUFFIX,replicate.ai,Coding
-    - DOMAIN-SUFFIX,api.replicate.com,Coding
-    - DOMAIN-SUFFIX,copilot.microsoft.com,Coding
-    - RULE-SET,GitHub,Coding
-    # 始终直连
-    - DOMAIN-KEYWORD,bilibili,DIRECT
-    # 平台分流（使用 rule-providers）
-    - RULE-SET,YouTube,Media
-    - RULE-SET,YouTubeMusic,Media
-    - RULE-SET,Spotify,Media
-    - RULE-SET,Telegram,Media
-    - RULE-SET,Twitter,Media
-    - RULE-SET,Google,Google
-    - RULE-SET,Microsoft,Microsoft
-    - RULE-SET,OneDrive,Microsoft
-    - RULE-SET,Apple,Apple
-    # 中国大陆直连（域名与 IP）
-    - RULE-SET,ChinaMax,DIRECT
-    - GEOIP,CN,DIRECT
-    # 兜底（漏网之鱼）
-    - MATCH,Catch
+rules:
+  # 局域网与常见私有网段直连
+  - RULE-SET,LAN,DIRECT
+  # 广告拦截（与 AdGuard 分组对齐）
+  - RULE-SET,Advertising,AdGuard
+  # 编程相关流量
+  - DOMAIN-SUFFIX,openai.com,Coding
+  - DOMAIN-SUFFIX,chatgpt.com,Coding
+  - DOMAIN-KEYWORD,openai,Coding
+  - DOMAIN-SUFFIX,gemini.google.com,Coding
+  - DOMAIN-SUFFIX,aistudio.google.com,Coding
+  - DOMAIN-SUFFIX,ai.google.dev,Coding
+  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,Coding
+  - DOMAIN-SUFFIX,makersuite.google.com,Coding
+  - DOMAIN-SUFFIX,x.ai,Coding
+  - DOMAIN-SUFFIX,grok.x.ai,Coding
+  - DOMAIN-KEYWORD,grok,Coding
+  - DOMAIN-SUFFIX,anthropic.com,Coding
+  - DOMAIN-SUFFIX,api.anthropic.com,Coding
+  - DOMAIN-SUFFIX,claude.ai,Coding
+  - DOMAIN-KEYWORD,claude,Coding
+  - DOMAIN-SUFFIX,perplexity.ai,Coding
+  - DOMAIN-SUFFIX,api.perplexity.ai,Coding
+  - DOMAIN-SUFFIX,pplx.ai,Coding
+  - DOMAIN-SUFFIX,cohere.com,Coding
+  - DOMAIN-SUFFIX,cohere.ai,Coding
+  - DOMAIN-SUFFIX,api.cohere.ai,Coding
+  - DOMAIN-SUFFIX,mistral.ai,Coding
+  - DOMAIN-SUFFIX,api.mistral.ai,Coding
+  - DOMAIN-SUFFIX,together.ai,Coding
+  - DOMAIN-SUFFIX,together.xyz,Coding
+  - DOMAIN-SUFFIX,api.together.xyz,Coding
+  - DOMAIN-SUFFIX,openrouter.ai,Coding
+  - DOMAIN-SUFFIX,api.openrouter.ai,Coding
+  - DOMAIN-SUFFIX,huggingface.co,Coding
+  - DOMAIN-SUFFIX,api-inference.huggingface.co,Coding
+  - DOMAIN-SUFFIX,stability.ai,Coding
+  - DOMAIN-SUFFIX,api.stability.ai,Coding
+  - DOMAIN-SUFFIX,replicate.com,Coding
+  - DOMAIN-SUFFIX,replicate.ai,Coding
+  - DOMAIN-SUFFIX,api.replicate.com,Coding
+  - DOMAIN-SUFFIX,copilot.microsoft.com,Coding
+  - RULE-SET,GitHub,Coding
+  # 始终直连
+  - DOMAIN-KEYWORD,bilibili,DIRECT
+  # 平台分流（使用 rule-providers）
+  - RULE-SET,YouTube,Media
+  - RULE-SET,YouTubeMusic,Media
+  - RULE-SET,Spotify,Media
+  - RULE-SET,Telegram,Media
+  - RULE-SET,Twitter,Media
+  - RULE-SET,Google,Google
+  - RULE-SET,Microsoft,Microsoft
+  - RULE-SET,OneDrive,Microsoft
+  - RULE-SET,Apple,Apple
+  # 中国大陆直连（域名与 IP）
+  - RULE-SET,ChinaMax,DIRECT
+  - GEOIP,CN,DIRECT
+  # 兜底（漏网之鱼）
+  - MATCH,Catch
