@@ -22,10 +22,10 @@ dns:
     - 8.8.8.8
   nameserver-policy:
     geosite:cn:
-        - https://doh.pub/dns-query
-        - https://dns.alidns.com/dns-query
-        - https://1.12.12.12/dns-query
-        - https://223.5.5.5/dns-query
+      - https://doh.pub/dns-query
+      - https://dns.alidns.com/dns-query
+      - https://1.12.12.12/dns-query
+      - https://223.5.5.5/dns-query
   proxy-server-nameserver:
     - https://doh.pub/dns-query
     - https://dns.alidns.com/dns-query
@@ -39,141 +39,161 @@ sniffer:
     - tls
     - http
   force-domain:
-    - '+.openai.com'
-    - '+.chatgpt.com'
-    - '+.anthropic.com'
-    - '+.claude.ai'
-    - '+.x.ai'
-    - '+.grok.x.ai'
-    - '+.perplexity.ai'
-    - '+.pplx.ai'
-    - '+.cohere.ai'
-    - '+.cohere.com'
-    - '+.mistral.ai'
-    - '+.together.ai'
-    - '+.together.xyz'
-    - '+.openrouter.ai'
-    - '+.huggingface.co'
-    - '+.stability.ai'
-    - '+.replicate.com'
+    - "+.openai.com"
+    - "+.chatgpt.com"
+    - "+.anthropic.com"
+    - "+.claude.ai"
+    - "+.x.ai"
+    - "+.grok.x.ai"
+    - "+.perplexity.ai"
+    - "+.pplx.ai"
+    - "+.cohere.ai"
+    - "+.cohere.com"
+    - "+.mistral.ai"
+    - "+.together.ai"
+    - "+.together.xyz"
+    - "+.openrouter.ai"
+    - "+.huggingface.co"
+    - "+.stability.ai"
+    - "+.replicate.com"
   skip-domain:
-    - 'msftconnecttest.com'
-    - 'msftncsi.com'
+    - "msftconnecttest.com"
+    - "msftncsi.com"
 proxies:
 proxy-groups:
-  - name: 默认节点
+  # 基础选择器
+  - name: Switch
     type: select
     proxies:
       - <all>
-  - name: AI代理
+  - name: Intelligent
     type: select
     proxies:
-      - 默认节点
-      - <all>
-      - <countries>
-      - DIRECT
-  - name: 游戏平台
-    type: select
-    proxies:
-      - 默认节点
+      - Switch
       - <all>
       - <countries>
       - DIRECT
-  - name: Telegram
+  - name: Google
     type: select
     proxies:
-      - 默认节点
-      - <all>
-      - <countries>
-      - DIRECT
-  - name: Youtube
-    type: select
-    proxies:
-      - 默认节点
+      - Switch
       - <all>
       - <countries>
       - DIRECT
   - name: Microsoft
     type: select
     proxies:
-      - 默认节点
+      - Switch
       - <all>
       - <countries>
       - DIRECT
   - name: Apple
     type: select
     proxies:
-      - 默认节点
+      - Switch
       - <all>
       - <countries>
       - DIRECT
-  - name: 广告拦截
+  - name: Github
+    type: select
+    proxies:
+      - Switch
+      - <all>
+      - <countries>
+      - DIRECT
+  - name: YouTube
+    type: select
+    proxies:
+      - Switch
+      - <all>
+      - <countries>
+      - DIRECT
+  - name: Telegram
+    type: select
+    proxies:
+      - Switch
+      - <all>
+      - <countries>
+      - DIRECT
+  - name: Twitter
+    type: select
+    proxies:
+      - Switch
+      - <all>
+      - <countries>
+      - DIRECT
+  - name: AdGuard
     type: select
     proxies:
       - REJECT
       - DIRECT
-  - name: 漏网之鱼
+  - name: Catch
     type: select
     proxies:
-      - 默认节点
+      - Switch
       - <all>
       - <countries>
       - DIRECT
 rules:
+  # 本地与私有网络直连
   - GEOSITE,private,DIRECT,no-resolve
   - GEOIP,private,DIRECT
-  - GEOSITE,category-ads-all,广告拦截
-  # AI代理（优先生效）
-  - GEOSITE,openai,AI代理
-  - DOMAIN-SUFFIX,openai.com,AI代理
-  - DOMAIN-SUFFIX,chatgpt.com,AI代理
-  - DOMAIN-KEYWORD,openai,AI代理
-  - DOMAIN-SUFFIX,gemini.google.com,AI代理
-  - DOMAIN-SUFFIX,aistudio.google.com,AI代理
-  - DOMAIN-SUFFIX,ai.google.dev,AI代理
-  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,AI代理
-  - DOMAIN-SUFFIX,makersuite.google.com,AI代理
-  - DOMAIN-SUFFIX,x.ai,AI代理
-  - DOMAIN-SUFFIX,grok.x.ai,AI代理
-  - DOMAIN-KEYWORD,grok,AI代理
-  - DOMAIN-SUFFIX,anthropic.com,AI代理
-  - DOMAIN-SUFFIX,api.anthropic.com,AI代理
-  - DOMAIN-SUFFIX,claude.ai,AI代理
-  - DOMAIN-KEYWORD,claude,AI代理
-  - DOMAIN-SUFFIX,perplexity.ai,AI代理
-  - DOMAIN-SUFFIX,api.perplexity.ai,AI代理
-  - DOMAIN-SUFFIX,pplx.ai,AI代理
-  - DOMAIN-SUFFIX,cohere.com,AI代理
-  - DOMAIN-SUFFIX,cohere.ai,AI代理
-  - DOMAIN-SUFFIX,api.cohere.ai,AI代理
-  - DOMAIN-SUFFIX,mistral.ai,AI代理
-  - DOMAIN-SUFFIX,api.mistral.ai,AI代理
-  - DOMAIN-SUFFIX,together.ai,AI代理
-  - DOMAIN-SUFFIX,together.xyz,AI代理
-  - DOMAIN-SUFFIX,api.together.xyz,AI代理
-  - DOMAIN-SUFFIX,openrouter.ai,AI代理
-  - DOMAIN-SUFFIX,api.openrouter.ai,AI代理
-  - DOMAIN-SUFFIX,huggingface.co,AI代理
-  - DOMAIN-SUFFIX,api-inference.huggingface.co,AI代理
-  - DOMAIN-SUFFIX,stability.ai,AI代理
-  - DOMAIN-SUFFIX,api.stability.ai,AI代理
-  - DOMAIN-SUFFIX,replicate.com,AI代理
-  - DOMAIN-SUFFIX,replicate.ai,AI代理
-  - DOMAIN-SUFFIX,api.replicate.com,AI代理
-  - DOMAIN-SUFFIX,copilot.microsoft.com,AI代理
+  # 广告拦截
+  - GEOSITE,category-ads-all,AdGuard
+  # 信息收集
+  - DOMAIN-REGEX,\\.log\\.,REJECT
+  # AI
+  - GEOSITE,openai,Intelligent
+  - DOMAIN-SUFFIX,openai.com,Intelligent
+  - DOMAIN-SUFFIX,chatgpt.com,Intelligent
+  - DOMAIN-KEYWORD,openai,Intelligent
+  - DOMAIN-SUFFIX,gemini.google.com,Intelligent
+  - DOMAIN-SUFFIX,aistudio.google.com,Intelligent
+  - DOMAIN-SUFFIX,ai.google.dev,Intelligent
+  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,Intelligent
+  - DOMAIN-SUFFIX,makersuite.google.com,Intelligent
+  - DOMAIN-SUFFIX,x.ai,Intelligent
+  - DOMAIN-SUFFIX,grok.x.ai,Intelligent
+  - DOMAIN-KEYWORD,grok,Intelligent
+  - DOMAIN-SUFFIX,anthropic.com,Intelligent
+  - DOMAIN-SUFFIX,api.anthropic.com,Intelligent
+  - DOMAIN-SUFFIX,claude.ai,Intelligent
+  - DOMAIN-KEYWORD,claude,Intelligent
+  - DOMAIN-SUFFIX,perplexity.ai,Intelligent
+  - DOMAIN-SUFFIX,api.perplexity.ai,Intelligent
+  - DOMAIN-SUFFIX,pplx.ai,Intelligent
+  - DOMAIN-SUFFIX,cohere.com,Intelligent
+  - DOMAIN-SUFFIX,cohere.ai,Intelligent
+  - DOMAIN-SUFFIX,api.cohere.ai,Intelligent
+  - DOMAIN-SUFFIX,mistral.ai,Intelligent
+  - DOMAIN-SUFFIX,api.mistral.ai,Intelligent
+  - DOMAIN-SUFFIX,together.ai,Intelligent
+  - DOMAIN-SUFFIX,together.xyz,Intelligent
+  - DOMAIN-SUFFIX,api.together.xyz,Intelligent
+  - DOMAIN-SUFFIX,openrouter.ai,Intelligent
+  - DOMAIN-SUFFIX,api.openrouter.ai,Intelligent
+  - DOMAIN-SUFFIX,huggingface.co,Intelligent
+  - DOMAIN-SUFFIX,api-inference.huggingface.co,Intelligent
+  - DOMAIN-SUFFIX,stability.ai,Intelligent
+  - DOMAIN-SUFFIX,api.stability.ai,Intelligent
+  - DOMAIN-SUFFIX,replicate.com,Intelligent
+  - DOMAIN-SUFFIX,replicate.ai,Intelligent
+  - DOMAIN-SUFFIX,api.replicate.com,Intelligent
+  - DOMAIN-SUFFIX,copilot.microsoft.com,Intelligent
   # 始终直连
-  - GEOSITE,bilibili,DIRECT
-  - GEOSITE,category-games@cn,DIRECT
-  # 其它平台
-  - GEOSITE,github,默认节点
+  - DOMAIN-KEYWORD,bilibili,DIRECT
+  # 平台分流
+  - GEOSITE,github,Github
+  - GEOSITE,google,Google
   - GEOSITE,microsoft,Microsoft
   - GEOSITE,apple,Apple
   - GEOSITE,onedrive,Microsoft
-  - GEOSITE,youtube,Youtube
+  - GEOSITE,youtube,YouTube
   - GEOSITE,telegram,Telegram
   - GEOIP,telegram,Telegram
-  - GEOSITE,category-games,游戏平台
-  - GEOSITE,geolocation-!cn,默认节点
+  - GEOSITE,twitter,Twitter
+  # 中国大陆直连
   - GEOSITE,CN,DIRECT
   - GEOIP,CN,DIRECT
-  - MATCH,漏网之鱼
+  # 兜底（漏网之鱼）
+  - MATCH,Catch
