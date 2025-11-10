@@ -68,10 +68,12 @@ proxy-groups:
   # 基础选择器
   - name: Switch
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/liuliang(5).png
     proxies:
       - <all>
-  - name: Intelligent
+  - name: Coding
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/ChatGPT.png
     proxies:
       - Switch
       - <all>
@@ -79,6 +81,7 @@ proxy-groups:
       - DIRECT
   - name: Google
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Google.png
     proxies:
       - Switch
       - <all>
@@ -86,6 +89,7 @@ proxy-groups:
       - DIRECT
   - name: Microsoft
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Microsoft.png
     proxies:
       - Switch
       - <all>
@@ -93,6 +97,7 @@ proxy-groups:
       - DIRECT
   - name: Apple
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Apple_01.png
     proxies:
       - Switch
       - <all>
@@ -101,6 +106,7 @@ proxy-groups:
   # 媒体/社交合并
   - name: Media
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/YouTube_01.png
     proxies:
       - Switch
       - <all>
@@ -108,11 +114,13 @@ proxy-groups:
       - DIRECT
   - name: AdGuard
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/AdGuard.png
     proxies:
       - REJECT
       - DIRECT
   - name: Catch
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/warp.png
     proxies:
       - Switch
       - <all>
@@ -202,46 +210,46 @@ rules:
   # 广告拦截（与 AdGuard 分组对齐）
   - RULE-SET,Advertising,AdGuard
   # AI（优先生效，保持手动维护域名）
-  - DOMAIN-SUFFIX,openai.com,Intelligent
-  - DOMAIN-SUFFIX,chatgpt.com,Intelligent
-  - DOMAIN-KEYWORD,openai,Intelligent
-  - DOMAIN-SUFFIX,gemini.google.com,Intelligent
-  - DOMAIN-SUFFIX,aistudio.google.com,Intelligent
-  - DOMAIN-SUFFIX,ai.google.dev,Intelligent
-  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,Intelligent
-  - DOMAIN-SUFFIX,makersuite.google.com,Intelligent
-  - DOMAIN-SUFFIX,x.ai,Intelligent
-  - DOMAIN-SUFFIX,grok.x.ai,Intelligent
-  - DOMAIN-KEYWORD,grok,Intelligent
-  - DOMAIN-SUFFIX,anthropic.com,Intelligent
-  - DOMAIN-SUFFIX,api.anthropic.com,Intelligent
-  - DOMAIN-SUFFIX,claude.ai,Intelligent
-  - DOMAIN-KEYWORD,claude,Intelligent
-  - DOMAIN-SUFFIX,perplexity.ai,Intelligent
-  - DOMAIN-SUFFIX,api.perplexity.ai,Intelligent
-  - DOMAIN-SUFFIX,pplx.ai,Intelligent
-  - DOMAIN-SUFFIX,cohere.com,Intelligent
-  - DOMAIN-SUFFIX,cohere.ai,Intelligent
-  - DOMAIN-SUFFIX,api.cohere.ai,Intelligent
-  - DOMAIN-SUFFIX,mistral.ai,Intelligent
-  - DOMAIN-SUFFIX,api.mistral.ai,Intelligent
-  - DOMAIN-SUFFIX,together.ai,Intelligent
-  - DOMAIN-SUFFIX,together.xyz,Intelligent
-  - DOMAIN-SUFFIX,api.together.xyz,Intelligent
-  - DOMAIN-SUFFIX,openrouter.ai,Intelligent
-  - DOMAIN-SUFFIX,api.openrouter.ai,Intelligent
-  - DOMAIN-SUFFIX,huggingface.co,Intelligent
-  - DOMAIN-SUFFIX,api-inference.huggingface.co,Intelligent
-  - DOMAIN-SUFFIX,stability.ai,Intelligent
-  - DOMAIN-SUFFIX,api.stability.ai,Intelligent
-  - DOMAIN-SUFFIX,replicate.com,Intelligent
-  - DOMAIN-SUFFIX,replicate.ai,Intelligent
-  - DOMAIN-SUFFIX,api.replicate.com,Intelligent
-  - DOMAIN-SUFFIX,copilot.microsoft.com,Intelligent
+  - DOMAIN-SUFFIX,openai.com,Coding
+  - DOMAIN-SUFFIX,chatgpt.com,Coding
+  - DOMAIN-KEYWORD,openai,Coding
+  - DOMAIN-SUFFIX,gemini.google.com,Coding
+  - DOMAIN-SUFFIX,aistudio.google.com,Coding
+  - DOMAIN-SUFFIX,ai.google.dev,Coding
+  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,Coding
+  - DOMAIN-SUFFIX,makersuite.google.com,Coding
+  - DOMAIN-SUFFIX,x.ai,Coding
+  - DOMAIN-SUFFIX,grok.x.ai,Coding
+  - DOMAIN-KEYWORD,grok,Coding
+  - DOMAIN-SUFFIX,anthropic.com,Coding
+  - DOMAIN-SUFFIX,api.anthropic.com,Coding
+  - DOMAIN-SUFFIX,claude.ai,Coding
+  - DOMAIN-KEYWORD,claude,Coding
+  - DOMAIN-SUFFIX,perplexity.ai,Coding
+  - DOMAIN-SUFFIX,api.perplexity.ai,Coding
+  - DOMAIN-SUFFIX,pplx.ai,Coding
+  - DOMAIN-SUFFIX,cohere.com,Coding
+  - DOMAIN-SUFFIX,cohere.ai,Coding
+  - DOMAIN-SUFFIX,api.cohere.ai,Coding
+  - DOMAIN-SUFFIX,mistral.ai,Coding
+  - DOMAIN-SUFFIX,api.mistral.ai,Coding
+  - DOMAIN-SUFFIX,together.ai,Coding
+  - DOMAIN-SUFFIX,together.xyz,Coding
+  - DOMAIN-SUFFIX,api.together.xyz,Coding
+  - DOMAIN-SUFFIX,openrouter.ai,Coding
+  - DOMAIN-SUFFIX,api.openrouter.ai,Coding
+  - DOMAIN-SUFFIX,huggingface.co,Coding
+  - DOMAIN-SUFFIX,api-inference.huggingface.co,Coding
+  - DOMAIN-SUFFIX,stability.ai,Coding
+  - DOMAIN-SUFFIX,api.stability.ai,Coding
+  - DOMAIN-SUFFIX,replicate.com,Coding
+  - DOMAIN-SUFFIX,replicate.ai,Coding
+  - DOMAIN-SUFFIX,api.replicate.com,Coding
+  - DOMAIN-SUFFIX,copilot.microsoft.com,Coding
+  # - RULE-SET,GitHub,Coding
   # 始终直连
   - DOMAIN-KEYWORD,bilibili,DIRECT
   # 平台分流（使用 rule-providers）
-  - RULE-SET,GitHub,Microsoft
   - RULE-SET,Google,Google
   - RULE-SET,Microsoft,Microsoft
   - RULE-SET,OneDrive,Microsoft

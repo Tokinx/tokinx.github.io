@@ -29,11 +29,13 @@ proxy-groups:
   # 基础选择器
   - name: Switch
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/liuliang(5).png
     proxies:
       - <all>
   # 业务分流
   - name: Coding
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/ChatGPT.png
     proxies:
       - Switch
       - <all>
@@ -41,6 +43,7 @@ proxy-groups:
       - DIRECT
   - name: Media
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/YouTube_01.png
     proxies:
       - Switch
       - <all>
@@ -48,6 +51,7 @@ proxy-groups:
       - DIRECT
   - name: Google
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Google.png
     proxies:
       - Switch
       - <all>
@@ -55,6 +59,7 @@ proxy-groups:
       - DIRECT
   - name: Microsoft
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Microsoft.png
     proxies:
       - Switch
       - <all>
@@ -62,6 +67,7 @@ proxy-groups:
       - DIRECT
   - name: Apple
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Apple_01.png
     proxies:
       - Switch
       - <all>
@@ -69,11 +75,13 @@ proxy-groups:
       - DIRECT
   - name: AdGuard
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/AdGuard.png
     proxies:
       - REJECT
       - DIRECT
   - name: Catch
     type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/warp.png
     proxies:
       - Switch
       - <all>
@@ -212,7 +220,7 @@ rules:
   - DOMAIN-SUFFIX,replicate.ai,Coding
   - DOMAIN-SUFFIX,api.replicate.com,Coding
   - DOMAIN-SUFFIX,copilot.microsoft.com,Coding
-  - RULE-SET,GitHub,Coding
+  # - RULE-SET,GitHub,Coding
   # 始终直连
   - DOMAIN-KEYWORD,bilibili,DIRECT
   # 平台分流（使用 rule-providers）
