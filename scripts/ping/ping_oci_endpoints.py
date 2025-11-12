@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+批量 ping Oracle Cloud Object Storage 各区域端点，次数可配置（见文件顶部常量），输出 CSV，并按平均延迟排序输出到 fast.txt。
+
+输出文件：
+- results.csv  位于当前脚本目录
+- fast.txt     位于当前脚本目录
+
+用法：
+  python3 ping_oci_endpoints.py
+
+说明：
+- 若某个主机 100% 丢包，平均延迟记为无穷大，排序置底。
+- 解析支持 Linux 常见 `ping -q` 汇总格式（rtt min/avg/max/mdev）。
+"""
+
+import csv
+import math
+import os
+import re
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+
+
+ENDPOINTS = [
+    # 亚太地区
+    ("亚太地区", "日本东部", "东京", "objectstorage.ap-tokyo-1.oraclecloud.com"),
+    ("亚太地区", "日本中部", "大阪", "objectstorage.ap-osaka-1.oraclecloud.com"),
+    ("亚太地区", "韩国中部", "首尔", "objectstorage.ap-seoul-1.oraclecloud.com"),
+    ("亚太地区", "韩国北部", "春川", "objectstorage.ap-chuncheon-1.oraclecloud.com"),
+    ("亚太地区", "新加坡", "新加坡", "objectstorage.ap-singapore-1.oraclecloud.com"),
+    ("亚太地区", "澳大利亚东部", "悉尼", "objectstorage.ap-sydney-1.oraclecloud.com"),
+    ("亚太地区", "澳大利亚东南部", "墨尔本", "objectstorage.ap-melbourne-1.oraclecloud.com"),
+    ("亚太地区", "印度西部", "孟买", "objectstorage.ap-mumbai-1.oraclecloud.com"),
+    ("亚太地区", "印度南部", "海得拉巴", "objectstorage.ap-hyderabad-1.oraclecloud.com"),
+    ("亚太地区", "以色列中部", "耶路撒冷", "objectstorage.il-jerusalem-1.oraclecloud.com"),
+    # 北美地区
+    ("北美地区", "美国东部", "阿什本", "objectstorage.us-ashburn-1.oraclecloud.com"),
+    ("北美地区", "美国西部", "凤凰城", "objectstorage.us-phoenix-1.oraclecloud.com"),
+    ("北美地区", "美国西部", "圣何塞", "objectstorage.us-sanjose-1.oraclecloud.com"),
+    ("北美地区", "加拿大东南部", "蒙特利尔", "objectstorage.ca-montreal-1.oraclecloud.com"),
+    ("北美地区", "加拿大东南部", "多伦多", "objectstorage.ca-toronto-1.oraclecloud.com"),
+    ("北美地区", "墨西哥中部", "克雷塔罗", "objectstorage.mx-queretaro-1.oraclecloud.com"),
+    ("北美地区", "墨西哥东北部", "蒙特雷", "objectstorage.mx-monterrey-1.oraclecloud.com"),
+    # 欧洲地区
+    ("欧洲地区", "英国南部", "伦敦", "objectstorage.uk-london-1.oraclecloud.com"),
+    ("欧洲地区", "英国西部", "纽波特", "objectstorage.uk-cardiff-1.oraclecloud.com"),
+    ("欧洲地区", "德国中部", "法兰克福", "objectstorage.eu-frankfurt-1.oraclecloud.com"),
+    ("欧洲地区", "瑞士北部", "苏黎世", "objectstorage.eu-zurich-1.oraclecloud.com"),
+    ("欧洲地区", "瑞典中部", "斯德哥尔摩", "objectstorage.eu-stockholm-1.oraclecloud.com"),
+    ("欧洲地区", "荷兰西北部", "阿姆斯特丹", "objectstorage.eu-amsterdam-1.oraclecloud.com"),
+    ("欧洲地区", "法国中部", "巴黎", "objectstorage.eu-paris-1.oraclecloud.com"),
+    ("欧洲地区", "法国南部", "马赛", "objectstorage.eu-marseille-1.oraclecloud.com"), 
+    ("欧洲地区", "西班牙中部", "马德里", "objectstorage.eu-madrid-1.oraclecloud.com"),
+    ("欧洲地区", "意大利西北部", "米兰", "objectstorage.eu-milan-1.oraclecloud.com"),
+    # 中东地区
+    ("中东地区", "阿联酋东部", "迪拜", "objectstorage.me-dubai-1.oraclecloud.com"),
+    ("中东地区", "阿联酋中部", "阿布扎比", "objectstorage.me-abudhabi-1.oraclecloud.com"),
+    ("中东地区", "沙特阿拉伯西部", "吉达", "objectstorage.me-jeddah-1.oraclecloud.com"),
+    # 南美地区
+    ("南美地区", "巴西东部", "圣保罗", "objectstorage.sa-saopaulo-1.oraclecloud.com"),
+    ("南美地区", "巴西南部", "文郝多", "objectstorage.sa-vinhedo-1.oraclecloud.com"),
+    ("南美地区", "智利中部", "圣地亚哥", "objectstorage.sa-santiago-1.oraclecloud.com"),
+    ("南美地区", "哥伦比亚中部", "波哥大", "objectstorage.sa-bogota-1.oraclecloud.com"),
+    # 非洲地区
+    ("非洲地区", "南非中部", "约翰内斯堡", "objectstorage.af-johannesburg-1.oraclecloud.com"),
+]
+
+
+# 运行参数（可按需修改）
+# 每主机 ping 次数
+PING_COUNT = 30
+# 单次响应超时（秒）
+PING_TIMEOUT_S = 2
+# 包与包之间的间隔（秒），非特权用户通常最小允许 0.2s
+PING_INTERVAL_S = 0.2
+# 并发 worker 数量上限
+MAX_WORKERS = 8
+
+
+def run_ping(host: str, count: int = PING_COUNT, timeout: int = PING_TIMEOUT_S, interval: float = PING_INTERVAL_S) -> str:
+    """执行 ping 命令，返回原始输出文本。"""
+    # -n: 不做反向解析；-q: 总结输出；-c: 次数；-W: 单次超时（秒）
+    cmd = [
+        "ping",
+        "-n",
+        "-q",
+        "-c", str(count),
+        "-W", str(timeout),
+        "-i", str(interval),  # 间隔 0.2s（非特权允许的最小值通常为 0.2s）
+        host,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        return out.strip()
+    except FileNotFoundError:
+        print("未找到 ping 命令，请在系统中安装 ping。", file=sys.stderr)
+        sys.exit(1)
+
+
+def parse_ping_output(output: str):
+    """解析 ping 汇总输出，返回 metrics 字典。
+
+    返回字段：sent, received, loss_percent, min_ms, avg_ms, max_ms, mdev_ms
+    若无法解析 RTT，则对应值为 None。
+    """
+    # 解析收发与丢包率，例如：
+    # 10 packets transmitted, 10 received, 0% packet loss, time 9009ms
+    sent = received = None
+    loss_percent = None
+    m = re.search(r"(\d+)\s+packets transmitted,\s+(\d+)\s+received,\s+([0-9.]+)%\s+packet loss", output)
+    if m:
+        sent = int(m.group(1))
+        received = int(m.group(2))
+        loss_percent = float(m.group(3))
+
+    # 解析 RTT 汇总：
+    # rtt min/avg/max/mdev = 20.971/21.672/23.089/0.759 ms
+    min_ms = avg_ms = max_ms = mdev_ms = None
+    m2 = re.search(r"=\s*([0-9.]+)/([0-9.]+)/([0-9.]+)/([0-9.]+)\s*ms", output)
+    if m2:
+        min_ms = float(m2.group(1))
+        avg_ms = float(m2.group(2))
+        max_ms = float(m2.group(3))
+        mdev_ms = float(m2.group(4))
+    else:
+        # 兼容部分系统：round-trip min/avg/max/stddev = ...
+        m3 = re.search(r"round-trip\s+min/avg/max/(?:stddev|mdev)\s*=\s*([0-9.]+)/([0-9.]+)/([0-9.]+)/([0-9.]+)\s*ms", output)
+        if m3:
+            min_ms = float(m3.group(1))
+            avg_ms = float(m3.group(2))
+            max_ms = float(m3.group(3))
+            mdev_ms = float(m3.group(4))
+
+    return {
+        "sent": sent,
+        "received": received,
+        "loss_percent": loss_percent,
+        "min_ms": min_ms,
+        "avg_ms": avg_ms,
+        "max_ms": max_ms,
+        "mdev_ms": mdev_ms,
+    }
+
+
+def main():
+    here = os.path.dirname(os.path.abspath(__file__))
+    csv_path = os.path.join(here, "results.csv")
+    fast_path = os.path.join(here, "fast.txt")
+
+    rows = []
+
+    def task(item):
+        region, area, city, host = item
+        print(f"[PING] {region} / {area} / {city} -> {host}")
+        out = run_ping(host, count=PING_COUNT, timeout=PING_TIMEOUT_S, interval=PING_INTERVAL_S)
+        metrics = parse_ping_output(out)
+        sort_avg = metrics["avg_ms"] if (metrics["avg_ms"] is not None and (metrics["loss_percent"] is not None and metrics["loss_percent"] < 100.0)) else math.inf
+        return {
+            "大区": region,
+            "区域": area,
+            "城市": city,
+            "主机": host,
+            "发送": metrics["sent"],
+            "接收": metrics["received"],
+            "丢包率(%)": metrics["loss_percent"],
+            "最小(ms)": metrics["min_ms"],
+            "平均(ms)": metrics["avg_ms"],
+            "最大(ms)": metrics["max_ms"],
+            "抖动(ms)": metrics["mdev_ms"],
+            "_排序平均": sort_avg,
+        }
+
+    # 限制并发度，兼顾速度与稳定性
+    max_workers = min(MAX_WORKERS, len(ENDPOINTS))
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(task, item): item for item in ENDPOINTS}
+        for fut in as_completed(futures):
+            rows.append(fut.result())
+
+    # 写 CSV
+    fieldnames = ["大区", "区域", "城市", "主机", "发送", "接收", "丢包率(%)", "最小(ms)", "平均(ms)", "最大(ms)", "抖动(ms)"]
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow({k: r.get(k) for k in fieldnames})
+
+    # 排序并写 fast.txt
+    rows_sorted = sorted(rows, key=lambda r: (r["_排序平均"], r["丢包率(%)"] if r["丢包率(%)"] is not None else 100.0))
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(fast_path, "w", encoding="utf-8") as f:
+        f.write(f"生成时间: {ts}\n")
+        f.write("按平均延迟(升序)排序，单位 ms；100% 丢包置底\n")
+        for r in rows_sorted:
+            avg = r["平均(ms)"]
+            loss = r["丢包率(%)"]
+            avg_str = f"{avg:.3f}" if isinstance(avg, (int, float)) and not math.isinf(avg) else "NA"
+            loss_str = f"{loss:.1f}%" if isinstance(loss, (int, float)) else "NA"
+            line = (
+                f"{avg_str}\t丢包:{loss_str}\t{r['大区']} / {r['区域']} / {r['城市']}\t{r['主机']}"
+            )
+            f.write(line + "\n")
+
+    print(f"已写入: {csv_path}")
+    print(f"已写入: {fast_path}")
+
+
+if __name__ == "__main__":
+    main()
