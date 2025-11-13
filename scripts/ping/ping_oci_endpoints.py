@@ -12,7 +12,7 @@
 
 说明：
 - 若某个主机 100% 丢包，平均延迟记为无穷大，排序置底。
-- 解析支持 Linux 常见 `ping -q` 汇总格式（rtt min/avg/max/mdev）。
+- 解析支持 Linux/Unix 常见 `ping -q` 汇总格式（rtt min/avg/max/mdev），以及 Windows（英文/中文）汇总输出。
 """
 
 import csv
@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import sys
+import platform
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -82,17 +83,33 @@ MAX_WORKERS = 8
 
 
 def run_ping(host: str, count: int = PING_COUNT, timeout: int = PING_TIMEOUT_S, interval: float = PING_INTERVAL_S) -> str:
-    """执行 ping 命令，返回原始输出文本。"""
-    # -n: 不做反向解析；-q: 总结输出；-c: 次数；-W: 单次超时（秒）
-    cmd = [
-        "ping",
-        "-n",
-        "-q",
-        "-c", str(count),
-        "-W", str(timeout),
-        "-i", str(interval),  # 间隔 0.2s（非特权允许的最小值通常为 0.2s）
-        host,
-    ]
+    """执行 ping 命令，返回原始输出文本。
+
+    - 在 Windows 上：使用 `ping -n <count> -w <timeout_ms>`（不支持 `-i` 间隔）。
+    - 在 Linux/Unix 上：使用 `ping -n -q -c <count> -W <timeout_s> -i <interval>`。
+    """
+    sysname = platform.system().lower()
+    if sysname.startswith("win"):
+        # Windows `ping` 语法：-n 次数；-w 超时(毫秒)。不支持 -q/-i。
+        timeout_ms = max(1, int(timeout * 1000))
+        cmd = [
+            "ping",
+            "-n", str(count),
+            "-w", str(timeout_ms),
+            host,
+        ]
+    else:
+        # POSIX 风格（Linux 等）：-n 不做反代；-q 汇总输出；-c 次数；-W 超时(秒)；-i 间隔(秒)
+        cmd = [
+            "ping",
+            "-n",
+            "-q",
+            "-c", str(count),
+            "-W", str(timeout),
+            "-i", str(interval),
+            host,
+        ]
+
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         out = (proc.stdout or "") + "\n" + (proc.stderr or "")
@@ -108,8 +125,8 @@ def parse_ping_output(output: str):
     返回字段：sent, received, loss_percent, min_ms, avg_ms, max_ms, mdev_ms
     若无法解析 RTT，则对应值为 None。
     """
-    # 解析收发与丢包率，例如：
-    # 10 packets transmitted, 10 received, 0% packet loss, time 9009ms
+    # 解析收发与丢包率
+    # Linux 例：10 packets transmitted, 10 received, 0% packet loss, time 9009ms
     sent = received = None
     loss_percent = None
     m = re.search(r"(\d+)\s+packets transmitted,\s+(\d+)\s+received,\s+([0-9.]+)%\s+packet loss", output)
@@ -117,9 +134,32 @@ def parse_ping_output(output: str):
         sent = int(m.group(1))
         received = int(m.group(2))
         loss_percent = float(m.group(3))
+    else:
+        # Windows 英文：Packets: Sent = 4, Received = 4, Lost = 0 (0% loss)
+        m_win_en = re.search(
+            r"Packets:\s*Sent\s*=\s*(\d+),\s*Received\s*=\s*(\d+),\s*Lost\s*=\s*(\d+)\s*\((\d+)%\s*loss\)",
+            output,
+            re.IGNORECASE,
+        )
+        if m_win_en:
+            sent = int(m_win_en.group(1))
+            received = int(m_win_en.group(2))
+            # lost = int(m_win_en.group(3))  # 未直接使用
+            loss_percent = float(m_win_en.group(4))
+        else:
+            # Windows 中文（常见）：数据包: 已发送 = 4，已接收 = 4，丢失 = 0 (0% 丢失)
+            m_win_zh = re.search(
+                r"数据包[:：]\s*.*?已发送\s*=\s*(\d+).*?已接收\s*=\s*(\d+).*?丢失\s*=\s*(\d+)\s*\((\d+)%",
+                output,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if m_win_zh:
+                sent = int(m_win_zh.group(1))
+                received = int(m_win_zh.group(2))
+                loss_percent = float(m_win_zh.group(4))
 
     # 解析 RTT 汇总：
-    # rtt min/avg/max/mdev = 20.971/21.672/23.089/0.759 ms
+    # Linux：rtt min/avg/max/mdev = 20.971/21.672/23.089/0.759 ms
     min_ms = avg_ms = max_ms = mdev_ms = None
     m2 = re.search(r"=\s*([0-9.]+)/([0-9.]+)/([0-9.]+)/([0-9.]+)\s*ms", output)
     if m2:
@@ -135,6 +175,28 @@ def parse_ping_output(output: str):
             avg_ms = float(m3.group(2))
             max_ms = float(m3.group(3))
             mdev_ms = float(m3.group(4))
+        else:
+            # Windows 英文：Minimum = 11ms, Maximum = 49ms, Average = 25ms
+            m4 = re.search(
+                r"Minimum\s*=\s*(\d+)ms,\s*Maximum\s*=\s*(\d+)ms,\s*Average\s*=\s*(\d+)ms",
+                output,
+                re.IGNORECASE,
+            )
+            if m4:
+                min_ms = float(m4.group(1))
+                max_ms = float(m4.group(2))
+                avg_ms = float(m4.group(3))
+            else:
+                # Windows 中文：最短 = 11ms，最长 = 49ms，平均 = 25ms
+                m5 = re.search(
+                    r"最短\s*=\s*(\d+)ms.*?最长\s*=\s*(\d+)ms.*?平均\s*=\s*(\d+)ms",
+                    output,
+                    re.IGNORECASE | re.DOTALL,
+                )
+                if m5:
+                    min_ms = float(m5.group(1))
+                    max_ms = float(m5.group(2))
+                    avg_ms = float(m5.group(3))
 
     return {
         "sent": sent,
