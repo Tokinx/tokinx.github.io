@@ -8,7 +8,7 @@
 - fast.txt     位于当前脚本目录
 
 用法：
-  python3 ping_oci_endpoints.py
+  python3 ping_endpoints.py
 
 说明：
 - 若某个主机 100% 丢包，平均延迟记为无穷大，排序置底。
