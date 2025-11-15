@@ -1,0 +1,37 @@
+生成时间: 2025-11-13 13:08:40
+按平均延迟(升序)排序，单位 ms；100% 丢包置底
+161.969	丢包:46.7%	欧洲地区 / 意大利西北部 / 米兰	objectstorage.eu-milan-1.oraclecloud.com
+173.591	丢包:70.0%	欧洲地区 / 英国西部 / 纽波特	objectstorage.uk-cardiff-1.oraclecloud.com
+178.916	丢包:43.3%	欧洲地区 / 法国中部 / 巴黎	objectstorage.eu-paris-1.oraclecloud.com
+180.855	丢包:0.0%	欧洲地区 / 瑞士北部 / 苏黎世	objectstorage.eu-zurich-1.oraclecloud.com
+184.756	丢包:0.0%	亚太地区 / 日本东部 / 东京	objectstorage.ap-tokyo-1.oraclecloud.com
+188.540	丢包:0.0%	亚太地区 / 日本中部 / 大阪	objectstorage.ap-osaka-1.oraclecloud.com
+189.075	丢包:13.3%	中东地区 / 阿联酋中部 / 阿布扎比	objectstorage.me-abudhabi-1.oraclecloud.com
+203.560	丢包:3.3%	北美地区 / 美国西部 / 凤凰城	objectstorage.us-phoenix-1.oraclecloud.com
+215.352	丢包:30.0%	北美地区 / 墨西哥东北部 / 蒙特雷	objectstorage.mx-monterrey-1.oraclecloud.com
+221.266	丢包:13.3%	亚太地区 / 韩国北部 / 春川	objectstorage.ap-chuncheon-1.oraclecloud.com
+233.519	丢包:33.3%	欧洲地区 / 西班牙中部 / 马德里	objectstorage.eu-madrid-1.oraclecloud.com
+234.403	丢包:10.0%	欧洲地区 / 瑞典中部 / 斯德哥尔摩	objectstorage.eu-stockholm-1.oraclecloud.com
+234.456	丢包:50.0%	北美地区 / 美国西部 / 圣何塞	objectstorage.us-sanjose-1.oraclecloud.com
+245.088	丢包:76.7%	北美地区 / 墨西哥中部 / 克雷塔罗	objectstorage.mx-queretaro-1.oraclecloud.com
+250.554	丢包:0.0%	亚太地区 / 新加坡 / 新加坡	objectstorage.ap-singapore-1.oraclecloud.com
+267.211	丢包:13.3%	北美地区 / 美国东部 / 阿什本	objectstorage.us-ashburn-1.oraclecloud.com
+267.719	丢包:0.0%	北美地区 / 加拿大东南部 / 蒙特利尔	objectstorage.ca-montreal-1.oraclecloud.com
+269.493	丢包:46.7%	亚太地区 / 印度西部 / 孟买	objectstorage.ap-mumbai-1.oraclecloud.com
+271.622	丢包:80.0%	欧洲地区 / 德国中部 / 法兰克福	objectstorage.eu-frankfurt-1.oraclecloud.com
+277.762	丢包:0.0%	南美地区 / 哥伦比亚中部 / 波哥大	objectstorage.sa-bogota-1.oraclecloud.com
+278.561	丢包:40.0%	亚太地区 / 澳大利亚东南部 / 墨尔本	objectstorage.ap-melbourne-1.oraclecloud.com
+288.167	丢包:46.7%	亚太地区 / 澳大利亚东部 / 悉尼	objectstorage.ap-sydney-1.oraclecloud.com
+288.896	丢包:16.7%	北美地区 / 加拿大东南部 / 多伦多	objectstorage.ca-toronto-1.oraclecloud.com
+303.566	丢包:83.3%	亚太地区 / 印度南部 / 海得拉巴	objectstorage.ap-hyderabad-1.oraclecloud.com
+310.911	丢包:43.3%	欧洲地区 / 英国南部 / 伦敦	objectstorage.uk-london-1.oraclecloud.com
+311.994	丢包:0.0%	亚太地区 / 韩国中部 / 首尔	objectstorage.ap-seoul-1.oraclecloud.com
+327.098	丢包:26.7%	中东地区 / 沙特阿拉伯西部 / 吉达	objectstorage.me-jeddah-1.oraclecloud.com
+340.250	丢包:0.0%	欧洲地区 / 荷兰西北部 / 阿姆斯特丹	objectstorage.eu-amsterdam-1.oraclecloud.com
+343.368	丢包:43.3%	亚太地区 / 以色列中部 / 耶路撒冷	objectstorage.il-jerusalem-1.oraclecloud.com
+345.349	丢包:86.7%	中东地区 / 阿联酋东部 / 迪拜	objectstorage.me-dubai-1.oraclecloud.com
+351.644	丢包:0.0%	南美地区 / 巴西南部 / 文郝多	objectstorage.sa-vinhedo-1.oraclecloud.com
+352.559	丢包:0.0%	南美地区 / 巴西东部 / 圣保罗	objectstorage.sa-saopaulo-1.oraclecloud.com
+417.407	丢包:83.3%	欧洲地区 / 法国南部 / 马赛	objectstorage.eu-marseille-1.oraclecloud.com
+428.627	丢包:0.0%	南美地区 / 智利中部 / 圣地亚哥	objectstorage.sa-santiago-1.oraclecloud.com
+462.095	丢包:0.0%	非洲地区 / 南非中部 / 约翰内斯堡	objectstorage.af-johannesburg-1.oraclecloud.com
