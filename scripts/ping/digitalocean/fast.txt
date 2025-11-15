@@ -1,0 +1,11 @@
+生成时间: 2025-11-15 09:50:50
+按平均延迟(升序)排序，单位 ms；100% 丢包置底
+192.529	丢包:0.0%	北美地区 / 美国西部 / 旧金山 (SFO2)	sfo2.digitaloceanspaces.com
+204.808	丢包:33.3%	北美地区 / 美国西部 / 旧金山 (SFO3)	sfo3.digitaloceanspaces.com
+250.692	丢包:30.0%	欧洲地区 / 英国南部 / 伦敦 (LON1)	lon1.digitaloceanspaces.com
+254.936	丢包:36.7%	欧洲地区 / 德国中部 / 法兰克福 (FRA1)	fra1.digitaloceanspaces.com
+255.991	丢包:0.0%	北美地区 / 美国东部 / 纽约 (NYC3)	nyc3.digitaloceanspaces.com
+276.053	丢包:0.0%	亚太地区 / 南亚 / 班加罗尔 (BLR1)	blr1.digitaloceanspaces.com
+283.778	丢包:3.3%	欧洲地区 / 荷兰北部 / 阿姆斯特丹 (AMS3)	ams3.digitaloceanspaces.com
+289.496	丢包:0.0%	北美地区 / 加拿大东部 / 多伦多 (TOR1)	tor1.digitaloceanspaces.com
+349.464	丢包:36.7%	亚太地区 / 东南亚 / 新加坡 (SGP1)	sgp1.digitaloceanspaces.com
