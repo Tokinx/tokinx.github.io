@@ -47,7 +47,7 @@
     {
       "type": "hysteria2",
       "tag": "⭕️TARGET NODE TAG HERE",
-      "server": "us1.iproxy.pp.ua",
+      "server": "",
       "server_port": 32735,
       "password": "⭕️TARGET NODE UUID HERE",
       "tls": { "enabled": true, "server_name": "music.apple.com", "alpn": ["h3"], "insecure": true }
