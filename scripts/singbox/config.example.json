@@ -2,14 +2,24 @@
   "log": { "level": "info" },
   "inbounds": [
     {
-      "type": "vless",
-      "tag": "reality-in",
+      "type": "direct",
+      "tag": "reality-guard",
       "listen": "::",
       "listen_port": 31735,
+      "network": "tcp",
+      "override_address": "127.0.0.1",
+      "override_port": 31736
+    },
+    {
+      "type": "vless",
+      "tag": "reality-in",
+      "listen": "127.0.0.1",
+      "listen_port": 31736,
       "users": [{ "uuid": "⭕️YOUR UUID HERE", "flow": "xtls-rprx-vision" }],
       "tls": {
         "enabled": true,
         "server_name": "music.apple.com",
+        "alpn": ["h2", "http/1.1"],
         "reality": {
           "enabled": true,
           "handshake": { "server": "music.apple.com", "server_port": 443 },
@@ -38,5 +48,13 @@
   "outbounds": [
     { "type": "direct", "tag": "direct" },
     { "type": "block", "tag": "block" }
-  ]
+  ],
+  "route": {
+    "rules": [
+      { "action": "sniff", "inbound": ["reality-guard"], "sniffer": ["tls"], "timeout": "300ms" },
+      { "action": "route", "inbound": ["reality-guard"], "domain": ["music.apple.com"], "outbound": "direct" },
+      { "action": "reject", "inbound": ["reality-guard"], "method": "drop" }
+    ],
+    "final": "direct"
+  }
 }
