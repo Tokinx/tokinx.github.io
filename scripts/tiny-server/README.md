@@ -17,6 +17,10 @@ bash reinstall.sh debian 13 --password <你的密码>
 
 # 开启 BBR
 echo "net.core.default_qdisc = fq" > /etc/sysctl.d/99-bbr.conf && echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.d/99-bbr.conf && echo "tcp_bbr" > /etc/modules-load.d/bbr.conf && sysctl --system
+
+# 开启 BBR & 网络优化配置
+wget -O /etc/sysctl.d/99-bbr.conf https://tokinx.github.io/scripts/tiny-server/99-bbr.conf && sysctl --system
+
 reboot
 
 lsmod | grep bbr
