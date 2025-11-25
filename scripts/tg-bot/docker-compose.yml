@@ -1,0 +1,10 @@
+services:
+  tg-chat-bot:
+    container_name: tg-chat-bot
+    restart: always
+    volumes:
+      - $PWD/.env:/app/.env
+      - $PWD/data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+    image: weijiaqaq/tg-antiharassment-bot:latest
