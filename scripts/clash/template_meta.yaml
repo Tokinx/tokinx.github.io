@@ -139,6 +139,12 @@ rule-providers:
     path: ./ruleset/Google.yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Google/Google.yaml
     interval: 86400
+  GoogleDrive:
+    type: http
+    behavior: classical
+    path: ./ruleset/GoogleDrive.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/GoogleDrive/GoogleDrive.yaml
+    interval: 86400
   Microsoft:
     type: http
     behavior: classical
@@ -162,6 +168,48 @@ rule-providers:
     behavior: classical
     path: ./ruleset/GitHub.yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/GitHub/GitHub.yaml
+    interval: 86400
+  Gemini:
+    type: http
+    behavior: classical
+    path: ./ruleset/Gemini.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Gemini/Gemini.yaml
+    interval: 86400
+  OpenAI:
+    type: http
+    behavior: classical
+    path: ./ruleset/OpenAI.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/OpenAI/OpenAI.yaml
+    interval: 86400
+  Claude:
+    type: http
+    behavior: classical
+    path: ./ruleset/Claude.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Claude/Claude.yaml
+    interval: 86400
+  Anthropic:
+    type: http
+    behavior: classical
+    path: ./ruleset/Anthropic.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Anthropic/Anthropic.yaml
+    interval: 86400
+  Copilot:
+    type: http
+    behavior: classical
+    path: ./ruleset/Copilot.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Copilot/Copilot.yaml
+    interval: 86400
+  MicrosoftEdge:
+    type: http
+    behavior: classical
+    path: ./ruleset/MicrosoftEdge.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/MicrosoftEdge/MicrosoftEdge.yaml
+    interval: 86400
+  Cloudflare:
+    type: http
+    behavior: classical
+    path: ./ruleset/Cloudflare.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Cloudflare/Cloudflare.yaml
     interval: 86400
   YouTube:
     type: http
@@ -193,6 +241,12 @@ rule-providers:
     path: ./ruleset/Twitter.yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Twitter/Twitter.yaml
     interval: 86400
+  Download:
+    type: http
+    behavior: classical
+    path: ./ruleset/Download.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Download/Download.yaml
+    interval: 86400
   LAN:
     type: http
     behavior: classical
@@ -204,6 +258,12 @@ rule-providers:
     behavior: classical
     path: ./ruleset/ChinaMax.yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax/ChinaMax.yaml
+    interval: 86400
+  ChinaMax_IP:
+    type: http
+    behavior: classical
+    path: ./ruleset/ChinaMax_IP.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax_IP/ChinaMax_IP.yaml
     interval: 86400
 rules:
   # 局域网与本机优先直连
@@ -222,21 +282,17 @@ rules:
   # 广告拦截
   - RULE-SET,Advertising,广告拦截
   # 编程相关流量
-  - DOMAIN-SUFFIX,openai.com,编程开发
-  - DOMAIN-SUFFIX,chatgpt.com,编程开发
-  - DOMAIN-KEYWORD,openai,编程开发
-  - DOMAIN-SUFFIX,gemini.google.com,编程开发
-  - DOMAIN-SUFFIX,aistudio.google.com,编程开发
-  - DOMAIN-SUFFIX,ai.google.dev,编程开发
-  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,编程开发
-  - DOMAIN-SUFFIX,makersuite.google.com,编程开发
+  - RULE-SET,GitHub,编程开发
+  - RULE-SET,Gemini,编程开发
+  - RULE-SET,OpenAI,编程开发
+  - RULE-SET,Claude,编程开发
+  - RULE-SET,Anthropic,编程开发
+  - RULE-SET,Copilot,编程开发
+  - RULE-SET,Cloudflare,编程开发
+  - RULE-SET,MicrosoftEdge,编程开发
   - DOMAIN-SUFFIX,x.ai,编程开发
   - DOMAIN-SUFFIX,grok.x.ai,编程开发
   - DOMAIN-KEYWORD,grok,编程开发
-  - DOMAIN-SUFFIX,anthropic.com,编程开发
-  - DOMAIN-SUFFIX,api.anthropic.com,编程开发
-  - DOMAIN-SUFFIX,claude.ai,编程开发
-  - DOMAIN-KEYWORD,claude,编程开发
   - DOMAIN-SUFFIX,perplexity.ai,编程开发
   - DOMAIN-SUFFIX,api.perplexity.ai,编程开发
   - DOMAIN-SUFFIX,pplx.ai,编程开发
@@ -257,20 +313,21 @@ rules:
   - DOMAIN-SUFFIX,replicate.com,编程开发
   - DOMAIN-SUFFIX,replicate.ai,编程开发
   - DOMAIN-SUFFIX,api.replicate.com,编程开发
-  - DOMAIN-SUFFIX,copilot.microsoft.com,编程开发
-  # - RULE-SET,GitHub,编程开发
   # 平台分流
   - RULE-SET,YouTube,影音娱乐
   - RULE-SET,YouTubeMusic,影音娱乐
   - RULE-SET,Spotify,影音娱乐
   - RULE-SET,Telegram,影音娱乐
   - RULE-SET,Twitter,影音娱乐
+  - RULE-SET,OneDrive,影音娱乐
+  - RULE-SET,GoogleDrive,影音娱乐
+  - RULE-SET,Download,影音娱乐
   - RULE-SET,Google,Google
   - RULE-SET,Microsoft,Microsoft
-  - RULE-SET,OneDrive,Microsoft
   - RULE-SET,Apple,Apple
   # 大陆直连
   - RULE-SET,ChinaMax,DIRECT
+  - RULE-SET,ChinaMax_IP,DIRECT
   - GEOIP,CN,DIRECT
   - DOMAIN-KEYWORD,bilibili,DIRECT
   # 漏网之鱼
