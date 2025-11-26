@@ -241,7 +241,6 @@ rules:
   - RULE-SET,Advertising,广告拦截
   # 编程相关流量
   - RULE-SET,GitHub,编程开发
-  - RULE-SET,Gemini,编程开发
   - RULE-SET,OpenAI,编程开发
   - RULE-SET,Claude,编程开发
   - RULE-SET,Anthropic,编程开发
@@ -281,6 +280,7 @@ rules:
   - RULE-SET,GoogleDrive,影音娱乐
   - RULE-SET,Download,影音娱乐
   - RULE-SET,Google,Google
+  - RULE-SET,Gemini,Google
   - RULE-SET,Microsoft,Microsoft
   - RULE-SET,Apple,Apple
   # 大陆直连
