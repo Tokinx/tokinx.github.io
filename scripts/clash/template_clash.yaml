@@ -169,11 +169,17 @@ rule-providers:
     path: ./ruleset/Cloudflare.yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Cloudflare/Cloudflare.yaml
     interval: 86400
+  # YouTube:
+  #   type: http
+  #   behavior: classical
+  #   path: ./ruleset/YouTube.yaml
+  #   url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/YouTube/YouTube.yaml
+  #   interval: 86400
   YouTube:
     type: http
     behavior: classical
     path: ./ruleset/YouTube.yaml
-    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/YouTube/YouTube.yaml
+    url: https://raw.githubusercontent.com/dler-io/Rules/refs/heads/main/Clash/Provider/Media/YouTube.yaml
     interval: 86400
   YouTubeMusic:
     type: http
@@ -271,11 +277,6 @@ rules:
   - DOMAIN-SUFFIX,replicate.ai,编程开发
   - DOMAIN-SUFFIX,api.replicate.com,编程开发
   # 平台分流
-  - IP-CIDR,172.110.32.0/21,Google
-  - IP-CIDR,173.194.0.0/16,Google
-  - IP-CIDR,216.73.80.0/20,Google
-  - IP-CIDR,74.125.0.0/16,Google
-  - IP-CIDR6,2620:120:e000::/40,Google
   - RULE-SET,YouTube,影音娱乐
   - RULE-SET,YouTubeMusic,影音娱乐
   - RULE-SET,Spotify,影音娱乐
