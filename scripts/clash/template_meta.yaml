@@ -313,8 +313,11 @@ rules:
   - DOMAIN-SUFFIX,replicate.ai,编程开发
   - DOMAIN-SUFFIX,api.replicate.com,编程开发
   # 平台分流
-  - RULE-SET,Google,Google
-  - RULE-SET,Gemini,Google
+  - IP-CIDR,172.110.32.0/21,Google
+  - IP-CIDR,173.194.0.0/16,Google
+  - IP-CIDR,216.73.80.0/20,Google
+  - IP-CIDR,74.125.0.0/16,Google
+  - IP-CIDR6,2620:120:e000::/40,Google
   - RULE-SET,YouTube,影音娱乐
   - RULE-SET,YouTubeMusic,影音娱乐
   - RULE-SET,Spotify,影音娱乐
@@ -323,6 +326,8 @@ rules:
   - RULE-SET,OneDrive,影音娱乐
   - RULE-SET,GoogleDrive,影音娱乐
   - RULE-SET,Download,影音娱乐
+  - RULE-SET,Google,Google
+  - RULE-SET,Gemini,Google
   - RULE-SET,Microsoft,Microsoft
   - RULE-SET,Apple,Apple
   # 大陆直连
