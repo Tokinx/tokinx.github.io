@@ -287,13 +287,14 @@ rules:
   - RULE-SET,LAN,DIRECT
   # 广告拦截
   - RULE-SET,Advertising,广告拦截
+  # CDN加速节点
+  - RULE-SET,Cloudflare,默认节点
   # 编程相关流量
   - RULE-SET,GitHub,编程开发
   - RULE-SET,OpenAI,编程开发
   - RULE-SET,Claude,编程开发
   - RULE-SET,Anthropic,编程开发
   - RULE-SET,Copilot,编程开发
-  - RULE-SET,Cloudflare,编程开发
   - RULE-SET,MicrosoftEdge,编程开发
   - DOMAIN-SUFFIX,x.ai,编程开发
   - DOMAIN-SUFFIX,grok.x.ai,编程开发
