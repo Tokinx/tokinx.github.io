@@ -157,6 +157,12 @@ rule-providers:
     path: ./ruleset/Apple.yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Apple/Apple.yaml
     interval: 86400
+  PayPal:
+    type: http
+    behavior: classical
+    path: ./ruleset/PayPal.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/PayPal/PayPal.yaml
+    interval: 86400
   GitHub:
     type: http
     behavior: classical
@@ -319,6 +325,7 @@ rules:
   - RULE-SET,Gemini,Google
   - RULE-SET,Microsoft,Microsoft
   - RULE-SET,Apple,Apple
+  - RULE-SET,PayPal,PayPal
   # 大陆直连
   - RULE-SET,ChinaMax,DIRECT
   - RULE-SET,ChinaMax_IP,DIRECT
