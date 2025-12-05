@@ -70,7 +70,7 @@ proxy-groups:
       - <all>
       - <countries>
       - DIRECT
-  - name: Paypal
+  - name: PayPal
     type: select
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Paypal.png
     proxies:
