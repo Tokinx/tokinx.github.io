@@ -70,6 +70,14 @@ proxy-groups:
       - <all>
       - <countries>
       - DIRECT
+  - name: Paypal
+    type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Paypal.png
+    proxies:
+      - 默认节点
+      - <all>
+      - <countries>
+      - DIRECT
   - name: 广告拦截
     type: select
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/AdGuard.png
