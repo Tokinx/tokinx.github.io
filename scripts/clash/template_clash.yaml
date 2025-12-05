@@ -8,17 +8,17 @@ dns:
   enable: true
   ipv6: true
   default-nameserver:
-    - 119.29.29.29 # Tencent DNS (DNSPod)
-    - 223.5.5.5 # AliDNS
+    - 119.29.29.29                       # Tencent DNS (DNSPod)
+    - 223.5.5.5                          # AliDNS
     - 1.1.1.1
     - 8.8.8.8
   nameserver:
-    - https://doh.pub/dns-query # Tencent DoH
-    - https://dns.alidns.com/dns-query # AliDNS DoH
+    - https://doh.pub/dns-query          # Tencent DoH
+    - https://dns.alidns.com/dns-query   # AliDNS DoH
     - https://1.1.1.1/dns-query
     - https://8.8.8.8/dns-query
-    - 119.29.29.29 # Tencent DNS (DNSPod)
-    - 223.5.5.5 # AliDNS
+    - 119.29.29.29                       # Tencent DNS (DNSPod)
+    - 223.5.5.5                          # AliDNS
     - 1.1.1.1
     - 8.8.8.8
 proxies:
@@ -97,12 +97,6 @@ rule-providers:
     path: ./ruleset/Google.yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Google/Google.yaml
     interval: 86400
-  GoogleDrive:
-    type: http
-    behavior: classical
-    path: ./ruleset/GoogleDrive.yaml
-    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/GoogleDrive/GoogleDrive.yaml
-    interval: 86400
   Microsoft:
     type: http
     behavior: classical
@@ -180,12 +174,6 @@ rule-providers:
     behavior: classical
     path: ./ruleset/YouTube.yaml
     url: https://raw.githubusercontent.com/dler-io/Rules/refs/heads/main/Clash/Provider/Media/YouTube.yaml
-    interval: 86400
-  YouTubeMusic:
-    type: http
-    behavior: classical
-    path: ./ruleset/YouTubeMusic.yaml
-    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/YouTubeMusic/YouTubeMusic.yaml
     interval: 86400
   Spotify:
     type: http
@@ -279,12 +267,11 @@ rules:
   - DOMAIN-SUFFIX,api.replicate.com,编程开发
   # 平台分流
   - RULE-SET,YouTube,影音娱乐
-  - RULE-SET,YouTubeMusic,影音娱乐
+  - DOMAIN,music.youtube.com,影音娱乐
   - RULE-SET,Spotify,影音娱乐
   - RULE-SET,Telegram,影音娱乐
   - RULE-SET,Twitter,影音娱乐
   - RULE-SET,OneDrive,影音娱乐
-  - RULE-SET,GoogleDrive,影音娱乐
   - RULE-SET,Download,影音娱乐
   - RULE-SET,Google,Google
   - RULE-SET,Gemini,Google
