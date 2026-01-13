@@ -1,7 +1,7 @@
 #!/bin/bash
 
-CGROUP_PATH="/sys/fs/cgroup/cpu_limit_global"
-SERVICE_FILE="/etc/systemd/system/cpu-limit.service"
+SLICE_PATH="/sys/fs/cgroup/user.slice"
+SERVICE_FILE="/etc/systemd/system/cpu-limit-user.service"
 PERIOD=100000
 
 # 必须 root
@@ -16,26 +16,21 @@ if ! stat -fc %T /sys/fs/cgroup | grep -q cgroup2fs; then
   exit 1
 fi
 
-# 自动识别 CPU 核心数
+# CPU 核心数
 CPU_CORES=$(nproc)
-
-if [ "$CPU_CORES" -le 0 ]; then
-  echo "❌ 无法识别 CPU 核心数"
-  exit 1
-fi
+[ "$CPU_CORES" -le 0 ] && exit 1
 
 echo "======================================"
-echo " Debian 13 VPS 全局 CPU 限制工具"
+echo " Debian 13 CPU 限制（user.slice 版）"
 echo "======================================"
 echo " CPU 核心数 : $CPU_CORES"
+echo " 限制对象   : 用户进程（user.slice）"
 echo " 输入范围   : 10 ~ 100"
-echo " 说明       :"
-echo "   - 百分比 = 整台 VPS 的 CPU 百分比"
-echo "   - 100 = 取消限制"
+echo " 100 = 取消限制"
 echo "======================================"
 read -p "请输入 CPU 限制百分比: " PERCENT
 
-# 校验输入
+# 校验
 if ! [[ "$PERCENT" =~ ^[0-9]+$ ]]; then
   echo "❌ 请输入数字"
   exit 1
@@ -46,47 +41,38 @@ if [ "$PERCENT" -lt 10 ] || [ "$PERCENT" -gt 100 ]; then
   exit 1
 fi
 
-# 100% = 取消限制
+# 取消限制
 if [ "$PERCENT" -eq 100 ]; then
-  echo "▶ 取消 CPU 限制..."
+  echo "▶ 取消 user.slice CPU 限制..."
 
-  systemctl disable cpu-limit.service 2>/dev/null
+  systemctl disable cpu-limit-user.service 2>/dev/null
   rm -f "$SERVICE_FILE"
 
-  # systemd 回到根 cgroup
-  echo 1 > /sys/fs/cgroup/cgroup.procs
+  echo "max $PERIOD" > "$SLICE_PATH/cpu.max"
 
-  echo "✅ CPU 限制已取消"
-  echo "ℹ️ 重启后不再生效"
+  echo "✅ user.slice CPU 限制已取消"
   exit 0
 fi
 
-# 计算 quota（关键）
+# 计算 quota
 TOTAL_QUOTA=$(( CPU_CORES * PERIOD ))
 QUOTA=$(( TOTAL_QUOTA * PERCENT / 100 ))
 
-echo "▶ 设置 CPU 限制为 ${PERCENT}%（${CPU_CORES} 核）"
+echo "▶ 设置 user.slice CPU 限制为 ${PERCENT}%"
 echo "▶ 等效可用 CPU：$(awk "BEGIN {printf \"%.2f\", $CPU_CORES * $PERCENT / 100}") 核"
 
-# 创建 cgroup
-mkdir -p "$CGROUP_PATH"
-echo "$QUOTA $PERIOD" > "$CGROUP_PATH/cpu.max"
+# 立即生效
+echo "$QUOTA $PERIOD" > "$SLICE_PATH/cpu.max"
 
-# 先放当前 shell
-echo $$ > "$CGROUP_PATH/cgroup.procs"
-
-# 再放 systemd（全局生效）
-echo 1 > "$CGROUP_PATH/cgroup.procs"
-
-# 写 systemd 开机服务
+# 写 systemd 开机生效
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=Global CPU limit (${PERCENT}% of ${CPU_CORES} cores)
+Description=Limit user.slice CPU to ${PERCENT}%
 After=multi-user.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'mkdir -p $CGROUP_PATH && echo "$QUOTA $PERIOD" > $CGROUP_PATH/cpu.max && echo 1 > $CGROUP_PATH/cgroup.procs'
+ExecStart=/bin/bash -c 'echo "$QUOTA $PERIOD" > $SLICE_PATH/cpu.max'
 RemainAfterExit=yes
 
 [Install]
@@ -94,8 +80,7 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable cpu-limit.service
+systemctl enable cpu-limit-user.service
 
-echo "✅ CPU 已限制为 ${PERCENT}%（整机）"
-echo "ℹ️ 重启后仍然生效"
-exit 0
+echo "✅ user.slice CPU 已限制为 ${PERCENT}%"
+echo "ℹ️ systemd / SSH / 内核不受影响"
