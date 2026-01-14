@@ -70,7 +70,7 @@ proxy-groups:
       - <all>
       - <countries>
       - DIRECT
-  - name: FixedIP
+  - name: 前置节点
     type: select
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Gcp.png
     proxies:
@@ -285,6 +285,9 @@ rules:
   - DOMAIN-SUFFIX,replicate.com,编程开发
   - DOMAIN-SUFFIX,replicate.ai,编程开发
   - DOMAIN-SUFFIX,api.replicate.com,编程开发
+  # 固定IP服务
+  - RULE-SET,PayPal,编程开发
+  - RULE-SET,Talkatone,编程开发
   # 平台分流
   - RULE-SET,YouTube,影音娱乐
   - DOMAIN,music.youtube.com,影音娱乐
@@ -297,8 +300,6 @@ rules:
   - RULE-SET,Gemini,Google
   - RULE-SET,Microsoft,Microsoft
   - RULE-SET,Apple,Apple
-  - RULE-SET,PayPal,FixedIP
-  - RULE-SET,Talkatone,FixedIP
   # 大陆直连
   - RULE-SET,ChinaMax,DIRECT
   - RULE-SET,ChinaMax_IP,DIRECT
