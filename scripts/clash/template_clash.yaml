@@ -40,7 +40,23 @@ proxy-groups:
       - DIRECT
   - name: 影音娱乐
     type: select
-    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/YouTube_01.png
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/DisneyPlus.png
+    proxies:
+      - 默认节点
+      - <all>
+      - <countries>
+      - DIRECT
+  - name: 游戏平台
+    type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/steam(1).png
+    proxies:
+      - 默认节点
+      - <all>
+      - <countries>
+      - DIRECT
+  - name: 网盘下载
+    type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Thunder.png
     proxies:
       - 默认节点
       - <all>
@@ -104,6 +120,12 @@ rule-providers:
     behavior: classical
     path: ./ruleset/Google.yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Google/Google.yaml
+    interval: 86400
+  GoogleDrive:
+    type: http
+    behavior: classical
+    path: ./ruleset/GoogleDrive.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/GoogleDrive/GoogleDrive.yaml
     interval: 86400
   Microsoft:
     type: http
@@ -201,6 +223,18 @@ rule-providers:
     path: ./ruleset/Spotify.yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Spotify/Spotify.yaml
     interval: 86400
+  Netflix:
+    type: http
+    behavior: classical
+    path: ./ruleset/Netflix.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Netflix/Netflix.yaml
+    interval: 86400
+  DisneyPlus:
+    type: http
+    behavior: classical
+    path: ./ruleset/DisneyPlus.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/DisneyPlus/DisneyPlus.yaml
+    interval: 86400
   Telegram:
     type: http
     behavior: classical
@@ -219,6 +253,12 @@ rule-providers:
     path: ./ruleset/Download.yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Download/Download.yaml
     interval: 86400
+  PrivateTracker:
+    type: http
+    behavior: classical
+    path: ./ruleset/PrivateTracker.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/PrivateTracker/PrivateTracker.yaml
+    interval: 86400
   LAN:
     type: http
     behavior: classical
@@ -236,6 +276,13 @@ rule-providers:
     behavior: classical
     path: ./ruleset/ChinaMax_IP.yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax_IP/ChinaMax_IP.yaml
+    interval: 86400
+  # 游戏平台
+  Game:
+    type: http
+    behavior: classical
+    path: ./ruleset/Game.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Game/Game.yaml
     interval: 86400
 rules:
   # 局域网与本机优先直连
@@ -292,10 +339,15 @@ rules:
   - RULE-SET,YouTube,影音娱乐
   - DOMAIN,music.youtube.com,影音娱乐
   - RULE-SET,Spotify,影音娱乐
+  - RULE-SET,Netflix,影音娱乐
+  - RULE-SET,DisneyPlus,影音娱乐
   - RULE-SET,Telegram,影音娱乐
   - RULE-SET,Twitter,影音娱乐
-  - RULE-SET,OneDrive,影音娱乐
-  - RULE-SET,Download,影音娱乐
+  - RULE-SET,Game,游戏平台
+  - RULE-SET,GoogleDrive,网盘下载
+  - RULE-SET,OneDrive,网盘下载
+  - RULE-SET,Download,网盘下载
+  - RULE-SET,PrivateTracker,网盘下载
   - RULE-SET,Google,Google
   - RULE-SET,Gemini,Google
   - RULE-SET,Microsoft,Microsoft
