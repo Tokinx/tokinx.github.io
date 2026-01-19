@@ -82,7 +82,7 @@ proxy-groups:
       - DIRECT
   - name: 影音娱乐
     type: select
-    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/YouTube_01.png
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/DisneyPlus.png
     proxies:
       - 默认节点
       - <all>
@@ -96,7 +96,7 @@ proxy-groups:
       - <all>
       - <countries>
       - DIRECT
-  - name: 网盘下载
+  - name: 磁力下载
     type: select
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Thunder.png
     proxies:

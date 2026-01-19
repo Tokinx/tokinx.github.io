@@ -54,7 +54,7 @@ proxy-groups:
       - <all>
       - <countries>
       - DIRECT
-  - name: 网盘下载
+  - name: 磁力下载
     type: select
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Thunder.png
     proxies:
