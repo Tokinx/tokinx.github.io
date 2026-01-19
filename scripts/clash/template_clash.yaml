@@ -67,6 +67,7 @@ proxy-groups:
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Google.png
     proxies:
       - 默认节点
+      - 编程开发
       - <all>
       - <countries>
       - DIRECT
@@ -75,6 +76,7 @@ proxy-groups:
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Microsoft.png
     proxies:
       - 默认节点
+      - 编程开发
       - <all>
       - <countries>
       - DIRECT
@@ -83,6 +85,7 @@ proxy-groups:
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Apple_01.png
     proxies:
       - 默认节点
+      - 编程开发
       - <all>
       - <countries>
       - DIRECT
