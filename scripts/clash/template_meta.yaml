@@ -386,13 +386,13 @@ rules:
   - RULE-SET,Telegram,影音娱乐
   - RULE-SET,Twitter,影音娱乐
   - RULE-SET,Game,游戏平台
-  - RULE-SET,GoogleDrive,网盘下载
-  - RULE-SET,OneDrive,网盘下载
-  - RULE-SET,Download,网盘下载
-  - RULE-SET,PrivateTracker,网盘下载
+  - RULE-SET,Download,磁力下载
+  - RULE-SET,PrivateTracker,磁力下载
   - RULE-SET,Google,Google
   - RULE-SET,Gemini,Google
+  - RULE-SET,GoogleDrive,Google
   - RULE-SET,Microsoft,Microsoft
+  - RULE-SET,OneDrive,Microsoft
   - RULE-SET,Apple,Apple
   # 大陆直连
   - RULE-SET,ChinaMax,DIRECT
