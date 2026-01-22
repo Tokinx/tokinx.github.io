@@ -28,32 +28,16 @@
           "max_time_difference": "1m"
         }
       }
-    },
-    {
-      "type": "hysteria2",
-      "tag": "hy2-in",
-      "listen": "::",
-      "listen_port": 32735,
-      "users": [{ "password": "⭕️YOUR PASSWORD HERE" }],
-      "obfs": { "type": "salamander", "password": "⭕️YOUR OBFS PASSWORD HERE" },
-      "tls": {
-        "enabled": true,
-        "server_name": "music.apple.com",
-        "alpn": ["h3"],
-        "certificate_path": "/etc/sing-box/server.pem",
-        "key_path": "/etc/sing-box/server.key"
-      }
     }
   ],
   "outbounds": [
-    { "type": "direct", "tag": "direct" },
-    { "type": "block", "tag": "block" }
+    { "type": "direct", "tag": "direct" }
   ],
   "route": {
     "rules": [
-      { "action": "sniff", "inbound": ["reality-guard"], "sniffer": ["tls"], "timeout": "300ms" },
-      { "action": "route", "inbound": ["reality-guard"], "domain": ["music.apple.com"], "outbound": "direct" },
-      { "action": "reject", "inbound": ["reality-guard"], "method": "drop" }
+      { "inbound": ["reality-guard"], "action": "sniff", "sniffer": ["tls"], "timeout": "300ms" },
+      { "inbound": ["reality-guard"], "action": "route", "domain": ["music.apple.com"], "outbound": "direct" },
+      { "inbound": ["reality-guard"], "action": "reject", "method": "drop" }
     ],
     "final": "direct"
   }

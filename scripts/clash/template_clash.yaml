@@ -51,6 +51,7 @@ proxy-groups:
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/steam(1).png
     proxies:
       - 默认节点
+      - 影音娱乐
       - <all>
       - <countries>
       - DIRECT
@@ -59,6 +60,7 @@ proxy-groups:
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Thunder.png
     proxies:
       - 默认节点
+      - 影音娱乐
       - <all>
       - <countries>
       - DIRECT
@@ -303,8 +305,6 @@ rules:
   - RULE-SET,LAN,DIRECT
   # 广告拦截
   - RULE-SET,Advertising,广告拦截
-  # CDN加速节点
-  - RULE-SET,Cloudflare,默认节点
   # 编程相关流量
   - RULE-SET,GitHub,编程开发
   - RULE-SET,OpenAI,编程开发
@@ -355,6 +355,8 @@ rules:
   - RULE-SET,Microsoft,Microsoft
   - RULE-SET,OneDrive,Microsoft
   - RULE-SET,Apple,Apple
+  # CDN加速节点
+  - RULE-SET,Cloudflare,默认节点
   # 大陆直连
   - RULE-SET,ChinaMax,DIRECT
   - RULE-SET,ChinaMax_IP,DIRECT
