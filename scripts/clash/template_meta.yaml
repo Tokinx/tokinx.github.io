@@ -346,7 +346,7 @@ rules:
   # 局域网与常见私有网段直连
   - RULE-SET,LAN,DIRECT
   # 广告拦截
-  - RULE-SET,Advertising,广告拦截
+  # - RULE-SET,Advertising,广告拦截
   # 编程相关流量
   - RULE-SET,GitHub,编程开发
   - RULE-SET,OpenAI,编程开发
