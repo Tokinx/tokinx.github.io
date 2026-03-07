@@ -79,7 +79,16 @@ except Exception as e:
     logger.error(f"Failed to initialize AcsClient: {e}")
     sys.exit(1)
 
-# ================== 5. 查询当前总流量 ==================
+# ================== 5. 查询当前流量 ==================
+def is_domestic_region(region_id):
+    # 境内流量规则: cn-* 且不包含 cn-hongkong/cn-taiwan
+    if not region_id:
+        return False
+    region_id = region_id.lower()
+    if not region_id.startswith("cn-"):
+        return False
+    return region_id not in {"cn-hongkong", "cn-taiwan"}
+
 def get_total_traffic_gb(client):
     request = CommonRequest()
     request.set_domain('cdt.aliyuncs.com')
@@ -91,11 +100,25 @@ def get_total_traffic_gb(client):
         response = client.do_action_with_exception(request)
         response_json = json.loads(response.decode('utf-8'))
 
-        total_bytes = sum(d.get('Traffic', 0) for d in response_json.get('TrafficDetails', []))
-        total_gb = total_bytes / (1024 ** 3)
+        traffic_details = response_json.get('TrafficDetails', [])
+        domestic_bytes = 0 # 境内流量
+        overseas_bytes = 0 # 境外流量
 
-        logger.info(f"当前总互联网流量: {total_gb:.2f} GB")
-        return total_gb
+        for detail in traffic_details:
+            traffic_bytes = detail.get("Traffic", 0) or 0
+            business_region_id = detail.get("BusinessRegionId")
+
+            if is_domestic_region(business_region_id):
+                domestic_bytes += traffic_bytes
+            else:
+                overseas_bytes += traffic_bytes
+
+        domestic_gb = domestic_bytes / (1024 ** 3) # 境内流量
+        overseas_gb = overseas_bytes / (1024 ** 3) # 境外流量
+        all_total_gb = (domestic_bytes + overseas_bytes) / (1024 ** 3) # 总流量
+
+        logger.info(f"当前互联网流量统计: 境内 {domestic_gb:.2f} GB | 境外 {overseas_gb:.2f} GB | 总计 {all_total_gb:.2f} GB")
+        return is_overseas_region(REGION_ID) and overseas_gb or domestic_gb
     except Exception as e:
         logger.error(f"获取CDT流量失败: {e}")
         sys.exit(1)
