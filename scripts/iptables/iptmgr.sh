@@ -709,12 +709,20 @@ cmd_delete() {
 }
 
 show_port_status() {
-  local allow_lines deny_lines input_policy
+  local allow_lines deny_lines input_policy filter_rules
+  allow_lines=""
+  deny_lines=""
+  input_policy=""
 
-  allow_lines="$(iptables -S INPUT | awk '
+  if ! filter_rules="$(iptables -S 2>/dev/null)"; then
+    warn "读取 filter 表规则失败，状态展示可能不完整。"
+  fi
+
+  allow_lines="$(printf '%s\n' "$filter_rules" | awk '
     {
-      rule_type=""; proto=""; dport=""; jump=""; in_if=""; ctstate=""
+      rule_type=""; chain=""; proto=""; dport=""; jump=""; in_if=""; ctstate=""
       if (NF >= 1) rule_type=$1
+      if (NF >= 2) chain=$2
       for (i=1; i<=NF; i++) {
         if ($i == "-p" && i+1<=NF) proto=$(i+1)
         if ($i == "--dport" && i+1<=NF) dport=$(i+1)
@@ -722,7 +730,7 @@ show_port_status() {
         if ($i == "-i" && i+1<=NF) in_if=$(i+1)
         if ($i == "--ctstate" && i+1<=NF) ctstate=$(i+1)
       }
-      if (rule_type == "-A" && jump == "ACCEPT") {
+      if (rule_type == "-A" && chain == "INPUT" && jump == "ACCEPT") {
         if (dport != "") {
           printf "%s %s\n", toupper(proto), dport
         } else if (in_if != "lo" && !(ctstate ~ /ESTABLISHED/ && ctstate ~ /RELATED/)) {
@@ -732,15 +740,17 @@ show_port_status() {
     }
   ' | sort -u)"
 
-  deny_lines="$(iptables -S INPUT | awk '
+  deny_lines="$(printf '%s\n' "$filter_rules" | awk '
     {
-      proto=""; dport=""; jump=""
+      rule_type=""; chain=""; proto=""; dport=""; jump=""
+      if (NF >= 1) rule_type=$1
+      if (NF >= 2) chain=$2
       for (i=1; i<=NF; i++) {
         if ($i == "-p" && i+1<=NF) proto=$(i+1)
         if ($i == "--dport" && i+1<=NF) dport=$(i+1)
         if ($i == "-j" && i+1<=NF) jump=$(i+1)
       }
-      if (jump == "DROP") {
+      if (rule_type == "-A" && chain == "INPUT" && jump == "DROP") {
         if (dport != "") {
           printf "%s %s\n", toupper(proto), dport
         } else {
@@ -749,7 +759,7 @@ show_port_status() {
       }
     }
   ' | sort -u)"
-  input_policy="$(iptables -S | awk '$1 == "-P" && $2 == "INPUT" { print $3; exit }')"
+  input_policy="$(printf '%s\n' "$filter_rules" | awk '$1 == "-P" && $2 == "INPUT" { print $3; exit }')"
 
   echo "当前放行端口信息:"
   if [[ -n "$allow_lines" ]]; then
@@ -769,9 +779,15 @@ show_port_status() {
 }
 
 show_forward_status() {
-  local fwd_lines
+  local fwd_lines nat_rules
+  fwd_lines=""
+  nat_rules=""
 
-  fwd_lines="$(iptables -t nat -S PREROUTING | awk '
+  if ! nat_rules="$(iptables -t nat -S PREROUTING 2>/dev/null)"; then
+    warn "读取 nat PREROUTING 规则失败，转发状态展示可能不完整。"
+  fi
+
+  fwd_lines="$(printf '%s\n' "$nat_rules" | awk '
     {
       proto=""; dport=""; jump=""; target=""
       for (i=1; i<=NF; i++) {
