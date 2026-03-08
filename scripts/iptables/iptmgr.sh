@@ -818,7 +818,8 @@ EOF
 }
 
 menu_forward_rules() {
-  local choice proto in_port to_ip to_port yn
+  local choice spec
+  local proto in_port target to_ip to_port flag
 
   while true; do
     screen_clear
@@ -828,33 +829,55 @@ menu_forward_rules() {
   - 将外部访问端口转发到内网服务器指定端口。
   - 自动启用内核转发 net.ipv4.ip_forward=1。
   - 支持 TCP / UDP，并记录转发日志。
+  - 采用单行输入，不再分步骤录入。
+
+输入格式:
+  协议 外部端口 目标IP:目标端口 [masq]
 
 示例:
-  - tcp, 8080 -> 192.168.1.10:80
-  - udp, 6000 -> 10.0.0.5:6000
+  - tcp 8080 192.168.1.10:80
+  - udp 6000 10.0.0.5:6000
+  - tcp 8443 10.0.0.8:443 masq
 EOF
     echo
     show_forward_status
     echo "------------------------------------------"
-    echo "1) 新增端口转发"
+    echo "1) 新增端口转发（单行输入）"
     echo "0) 返回上级"
     read -r -p "请输入：" choice
 
     case "${choice:-}" in
       1)
-        read -r -p "请输入协议（tcp/udp）: " proto
-        read -r -p "请输入外部端口: " in_port
-        read -r -p "请输入目标内网 IP: " to_ip
-        read -r -p "请输入目标端口: " to_port
-        read -r -p "是否启用 MASQUERADE（y/N）: " yn
+        read -r -p "请输入转发规则（如 tcp 8080 192.168.1.10:80）: " spec
+        read -r -a parts <<<"$spec"
 
-        if [[ "$yn" =~ ^[Yy]$ ]]; then
-          if ! (cmd_forward --proto "$proto" --in-port "$in_port" --to-ip "$to_ip" --to-port "$to_port" --masquerade); then
-            warn "转发配置失败，请检查输入。"
-          fi
+        if (( ${#parts[@]} < 3 || ${#parts[@]} > 4 )); then
+          warn "格式错误，应为: 协议 外部端口 目标IP:目标端口 [masq]"
         else
-          if ! (cmd_forward --proto "$proto" --in-port "$in_port" --to-ip "$to_ip" --to-port "$to_port"); then
-            warn "转发配置失败，请检查输入。"
+          proto="${parts[0],,}"
+          in_port="${parts[1]}"
+          target="${parts[2]}"
+          flag="${parts[3]:-}"
+
+          if [[ "$target" != *:* ]]; then
+            warn "目标地址格式错误，应为 目标IP:目标端口"
+          else
+            to_ip="${target%:*}"
+            to_port="${target##*:}"
+
+            if [[ -n "$flag" && "$flag" != "masq" && "$flag" != "masquerade" ]]; then
+              warn "可选参数仅支持 masq 或 masquerade"
+            else
+              if [[ -n "$flag" ]]; then
+                if ! (cmd_forward --proto "$proto" --in-port "$in_port" --to-ip "$to_ip" --to-port "$to_port" --masquerade); then
+                  warn "转发配置失败，请检查输入。"
+                fi
+              else
+                if ! (cmd_forward --proto "$proto" --in-port "$in_port" --to-ip "$to_ip" --to-port "$to_port"); then
+                  warn "转发配置失败，请检查输入。"
+                fi
+              fi
+            fi
           fi
         fi
         pause_enter
