@@ -574,6 +574,7 @@ delete_matching_rules_in_chain() {
   local proto="$3"
   local port="$4"
   local mode="$5" # dport|any
+  local max_iterations=200
 
   iptables -t "$table" -S "$chain" >/dev/null 2>&1 || {
     echo 0
@@ -582,16 +583,25 @@ delete_matching_rules_in_chain() {
 
   local deleted=0
   local line
+  local iterations=0
 
   while true; do
-    line="$(iptables -t "$table" -S "$chain" | nl -ba | awk -v proto="$proto" -v port="$port" -v mode="$mode" '
+    ((iterations++))
+    if (( iterations > max_iterations )); then
+      warn "删除规则触发安全阈值，已停止: table=$table chain=$chain proto=$proto port=$port mode=$mode"
+      break
+    fi
+
+    line="$(iptables -t "$table" -S "$chain" | awk -v proto="$proto" -v port="$port" -v mode="$mode" '
+      BEGIN { rule_index=0 }
       {
-        ln=$1
+        if ($1 != "-A") next
+        rule_index++
         has_proto=0
         has_dport=0
         has_sport=0
 
-        for (i=2; i<=NF; i++) {
+        for (i=1; i<=NF; i++) {
           if ($i=="-p" && i+1<=NF && $(i+1)==proto) has_proto=1
           if ($i=="--dport" && i+1<=NF && $(i+1)==port) has_dport=1
           if ($i=="--sport" && i+1<=NF && $(i+1)==port) has_sport=1
@@ -601,7 +611,7 @@ delete_matching_rules_in_chain() {
         if (mode=="dport" && has_proto && has_dport) matched=1
         if (mode=="any" && has_proto && (has_dport || has_sport)) matched=1
 
-        if (matched) last_line=ln
+        if (matched) last_line=rule_index
       }
       END {
         if (last_line!="") print last_line
@@ -609,8 +619,17 @@ delete_matching_rules_in_chain() {
     ' )"
 
     [[ -n "$line" ]] || break
-    iptables -t "$table" -D "$chain" "$line"
-    ((deleted++))
+    if [[ ! "$line" =~ ^[0-9]+$ ]] || (( line <= 0 )); then
+      warn "解析到异常规则序号，已停止: table=$table chain=$chain line=$line"
+      break
+    fi
+
+    if iptables -t "$table" -D "$chain" "$line"; then
+      ((deleted++))
+    else
+      warn "删除规则失败，已停止重试: -t $table -D $chain $line"
+      break
+    fi
   done
 
   echo "$deleted"
