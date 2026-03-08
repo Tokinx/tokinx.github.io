@@ -34,11 +34,14 @@ usage() {
   支持两种写法，可混用，多个规则用逗号分隔。
   写法A: 端口/协议（如 22/tcp）
   写法B: 多端口/协议（如 22,80,443/tcp）
+  特殊值: all（放行全部或禁用全部）
   协议支持: tcp / udp / all / 其他协议名(如 sctp)
 
 示例:
   $SCRIPT_NAME
   $SCRIPT_NAME init --rules "22,80,443/tcp"
+  $SCRIPT_NAME allow --rules "all"
+  $SCRIPT_NAME deny --rules "all"
   $SCRIPT_NAME allow --rules "80,443/tcp,53/udp"
   $SCRIPT_NAME deny --rules "3306/tcp,1900/udp"
   $SCRIPT_NAME allow --rules "5000/sctp"
@@ -121,6 +124,20 @@ append_rule_if_missing() {
   else
     iptables -t "$table" -A "$chain" "$@"
     info "已添加规则: -t $table -A $chain $*"
+  fi
+}
+
+insert_rule_if_missing() {
+  local table="$1"
+  local chain="$2"
+  local position="$3"
+  shift 3
+
+  if rule_exists "$table" "$chain" "$@"; then
+    info "规则已存在: -t $table -I $chain $position $*"
+  else
+    iptables -t "$table" -I "$chain" "$position" "$@"
+    info "已添加规则: -t $table -I $chain $position $*"
   fi
 }
 
@@ -231,7 +248,13 @@ ports_csv_to_rules_csv() {
 add_allow_rule() {
   local proto="$1"
   local port="$2"
-  append_rule_if_missing filter INPUT -p "$proto" --dport "$port" -m conntrack --ctstate NEW -j ACCEPT
+  # 放行规则使用高优先级插入，确保优先于禁用规则
+  insert_rule_if_missing filter INPUT 1 -p "$proto" --dport "$port" -m conntrack --ctstate NEW -j ACCEPT
+}
+
+add_allow_all_rule() {
+  # 放行所有流量，且优先级高于禁用规则
+  insert_rule_if_missing filter INPUT 1 -j ACCEPT
 }
 
 add_deny_rule() {
@@ -242,6 +265,14 @@ add_deny_rule() {
   prefix="$(log_prefix "IPTMGR-DENY-${proto}-${port} ")"
   append_rule_if_missing filter INPUT -p "$proto" --dport "$port" -m conntrack --ctstate NEW -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "$prefix" --log-level 4
   append_rule_if_missing filter INPUT -p "$proto" --dport "$port" -j DROP
+}
+
+add_deny_all_rule() {
+  local prefix
+  prefix="$(log_prefix "IPTMGR-DENY-ALL ")"
+
+  append_rule_if_missing filter INPUT -m limit --limit 10/min --limit-burst 20 -j LOG --log-prefix "$prefix" --log-level 4
+  append_rule_if_missing filter INPUT -j DROP
 }
 
 apply_allow_rules_csv() {
@@ -291,6 +322,7 @@ flush_all_tables() {
 cmd_init() {
   local rules_csv="$DEFAULT_INIT_RULES"
   local ports_csv=""
+  local rules_key=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -315,6 +347,8 @@ cmd_init() {
   if [[ -n "$ports_csv" ]]; then
     rules_csv="$(ports_csv_to_rules_csv "$ports_csv")"
   fi
+  rules_key="${rules_csv//[[:space:]]/}"
+  rules_key="${rules_key,,}"
 
   flush_all_tables
 
@@ -325,7 +359,11 @@ cmd_init() {
   append_rule_if_missing filter INPUT -i lo -j ACCEPT
   append_rule_if_missing filter INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-  apply_allow_rules_csv "$rules_csv"
+  if [[ "$rules_key" == "all" ]]; then
+    add_allow_all_rule
+  else
+    apply_allow_rules_csv "$rules_csv"
+  fi
 
   info "初始化完成：已默认拒绝所有入站端口，仅放行指定规则。"
 }
@@ -334,6 +372,7 @@ cmd_allow() {
   local rules_csv=""
   local proto=""
   local port=""
+  local rules_key=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -365,6 +404,13 @@ cmd_allow() {
   fi
 
   [[ -n "$rules_csv" ]] || error "allow 命令缺少 --rules"
+  rules_key="${rules_csv//[[:space:]]/}"
+  rules_key="${rules_key,,}"
+
+  if [[ "$rules_key" == "all" ]]; then
+    add_allow_all_rule
+    return
+  fi
 
   apply_allow_rules_csv "$rules_csv"
 }
@@ -373,6 +419,7 @@ cmd_deny() {
   local rules_csv=""
   local proto=""
   local port=""
+  local rules_key=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -404,6 +451,13 @@ cmd_deny() {
   fi
 
   [[ -n "$rules_csv" ]] || error "deny 命令缺少 --rules"
+  rules_key="${rules_csv//[[:space:]]/}"
+  rules_key="${rules_key,,}"
+
+  if [[ "$rules_key" == "all" ]]; then
+    add_deny_all_rule
+    return
+  fi
 
   apply_deny_rules_csv "$rules_csv"
 }
@@ -665,8 +719,12 @@ show_port_status() {
         if ($i == "--dport" && i+1<=NF) dport=$(i+1)
         if ($i == "-j" && i+1<=NF) jump=$(i+1)
       }
-      if (dport != "" && jump == "ACCEPT") {
-        printf "%s %s\n", toupper(proto), dport
+      if (jump == "ACCEPT") {
+        if (dport != "") {
+          printf "%s %s\n", toupper(proto), dport
+        } else if ($0 !~ /-i lo/ && $0 !~ /ESTABLISHED,RELATED/) {
+          print "ALL"
+        }
       }
     }
   ' | sort -u)"
@@ -679,8 +737,12 @@ show_port_status() {
         if ($i == "--dport" && i+1<=NF) dport=$(i+1)
         if ($i == "-j" && i+1<=NF) jump=$(i+1)
       }
-      if (dport != "" && jump == "DROP") {
-        printf "%s %s\n", toupper(proto), dport
+      if (jump == "DROP") {
+        if (dport != "") {
+          printf "%s %s\n", toupper(proto), dport
+        } else {
+          print "ALL"
+        }
       }
     }
   ' | sort -u)"
@@ -763,10 +825,12 @@ menu_port_rules() {
   - 支持两种写法，可混用，多个规则用逗号分隔:
     1) 端口/协议（如 80/tcp）
     2) 多端口/协议（如 80,443/tcp）
+  - 特殊值: all（放行全部或禁用全部）
   - 协议支持: tcp / udp / all / 其他协议名(如 sctp)
 
 示例:
   - 22,80,443/tcp
+  - all
   - 53,67/udp
   - 8080/all
   - 5000/sctp
@@ -793,14 +857,14 @@ EOF
         pause_enter
         ;;
       2)
-        read -r -p "请输入放行规则（如 80,443/tcp 或 80/tcp,53/udp）: " rules
+        read -r -p "请输入放行规则（如 all 或 80,443/tcp 或 80/tcp,53/udp）: " rules
         if ! (cmd_allow --rules "$rules"); then
           warn "放行失败，请检查输入。"
         fi
         pause_enter
         ;;
       3)
-        read -r -p "请输入禁用规则（如 3306,5432/tcp 或 1900/udp）: " rules
+        read -r -p "请输入禁用规则（如 all 或 3306,5432/tcp 或 1900/udp）: " rules
         if ! (cmd_deny --rules "$rules"); then
           warn "禁用失败，请检查输入。"
         fi
