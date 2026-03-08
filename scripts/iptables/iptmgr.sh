@@ -709,20 +709,23 @@ cmd_delete() {
 }
 
 show_port_status() {
-  local allow_lines deny_lines
+  local allow_lines deny_lines input_policy
 
   allow_lines="$(iptables -S INPUT | awk '
     {
-      proto=""; dport=""; jump=""
+      rule_type=""; proto=""; dport=""; jump=""; in_if=""; ctstate=""
+      if (NF >= 1) rule_type=$1
       for (i=1; i<=NF; i++) {
         if ($i == "-p" && i+1<=NF) proto=$(i+1)
         if ($i == "--dport" && i+1<=NF) dport=$(i+1)
         if ($i == "-j" && i+1<=NF) jump=$(i+1)
+        if ($i == "-i" && i+1<=NF) in_if=$(i+1)
+        if ($i == "--ctstate" && i+1<=NF) ctstate=$(i+1)
       }
-      if (jump == "ACCEPT") {
+      if (rule_type == "-A" && jump == "ACCEPT") {
         if (dport != "") {
           printf "%s %s\n", toupper(proto), dport
-        } else if ($0 !~ /-i lo/ && $0 !~ /ESTABLISHED,RELATED/) {
+        } else if (in_if != "lo" && !(ctstate ~ /ESTABLISHED/ && ctstate ~ /RELATED/)) {
           print "ALL"
         }
       }
@@ -746,6 +749,7 @@ show_port_status() {
       }
     }
   ' | sort -u)"
+  input_policy="$(iptables -S | awk '$1 == "-P" && $2 == "INPUT" { print $3; exit }')"
 
   echo "当前放行端口信息:"
   if [[ -n "$allow_lines" ]]; then
@@ -757,6 +761,8 @@ show_port_status() {
   echo "当前禁用端口信息:"
   if [[ -n "$deny_lines" ]]; then
     echo "$deny_lines" | sed 's/^/  - /'
+  elif [[ "$input_policy" == "DROP" ]]; then
+    echo "  - ALL（默认策略 INPUT DROP，未匹配放行规则的入站流量会被禁用）"
   else
     echo "  - 无"
   fi
