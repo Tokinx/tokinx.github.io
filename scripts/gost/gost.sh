@@ -49,11 +49,11 @@ ensure_dirs() {
 
 install_deps() {
     if [ "${OS_FAMILY}" = "alpine" ]; then
-        apk add --no-cache bash curl tar gzip >/dev/null
+        apk add --no-cache bash curl tar gzip grep >/dev/null
     else
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -y >/dev/null
-        apt-get install -y bash curl tar gzip >/dev/null
+        apt-get install -y bash curl tar gzip grep >/dev/null
     fi
 }
 
