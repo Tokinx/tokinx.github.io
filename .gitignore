@@ -1,1 +1,4 @@
 .local
+CLAUDE.md
+*.pyc
+.magi
