@@ -340,7 +340,8 @@ delete_forward_by_id() {
 
 uninstall_all() {
     clear_screen
-    printf "%s一键卸载%s\n\n" "$C_BOLD" "$C_RESET"
+    echo "一键卸载"
+    echo
     echo "此操作将会："
     echo "1. 删除所有已创建的转发"
     echo "2. 删除所有开机自启服务"
@@ -395,7 +396,7 @@ show_header() {
         echo "GOST路径：/usr/local/bin/gost"
         echo "GOST版本：$(/usr/local/bin/gost -V 2>/dev/null || echo 未知)"
     else
-        echo "GOST状态：${C_RED}未安装${C_RESET}"
+        echo "GOST状态：未安装"
     fi
     echo
 }
