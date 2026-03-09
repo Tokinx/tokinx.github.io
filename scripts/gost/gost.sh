@@ -6,6 +6,8 @@ APP_NAME="gost-manager"
 BASE_DIR="/etc/${APP_NAME}"
 DB_FILE="${BASE_DIR}/forwards.db"
 GOST_BIN="/usr/local/bin/gost"
+GOST_CDN_PREFIX=""
+FORWARD_SPEC=""
 
 info()  { printf "[INFO] %s\n" "$*"; }
 ok()    { printf "[OK]   %s\n" "$*"; }
@@ -41,6 +43,74 @@ detect_system() {
     fi
 }
 
+normalize_cdn_prefix() {
+    cdn="$1"
+    [ -n "${cdn}" ] || { err "--cdn 参数不能为空"; exit 1; }
+
+    case "${cdn}" in
+        http://*|https://*)
+            ;;
+        *)
+            err "--cdn 需以 http:// 或 https:// 开头"
+            exit 1
+            ;;
+    esac
+
+    case "${cdn}" in
+        */) GOST_CDN_PREFIX="${cdn}" ;;
+        *) GOST_CDN_PREFIX="${cdn}/" ;;
+    esac
+}
+
+parse_cli_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --cdn)
+                [ $# -ge 2 ] || { err "--cdn 需要提供 URL"; exit 1; }
+                normalize_cdn_prefix "$2"
+                shift 2
+                ;;
+            --cdn=*)
+                normalize_cdn_prefix "${1#--cdn=}"
+                shift
+                ;;
+            -h|--help)
+                cat <<EOF
+用法：
+  $0 [--cdn URL] [转发规则]
+
+示例：
+  $0 --cdn https://ghfast.top/
+  $0 --cdn https://ghfast.top/ tcp://:1234/1.1.1.1:1234
+EOF
+                exit 0
+                ;;
+            --)
+                shift
+                break
+                ;;
+            -*)
+                err "未知参数：$1"
+                exit 1
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+
+    if [ $# -gt 1 ]; then
+        err "参数过多，仅支持一个转发规则"
+        exit 1
+    fi
+
+    FORWARD_SPEC="${1:-}"
+}
+
+escape_sed_replacement() {
+    printf '%s' "$1" | sed 's/[\\/&]/\\&/g'
+}
+
 ensure_dirs() {
     mkdir -p "${BASE_DIR}"
     touch "${DB_FILE}"
@@ -61,10 +131,37 @@ install_gost() {
     info "未检测到 gost，开始安装最新版本..."
     install_deps
 
-    if ! curl -fsSL https://github.com/go-gost/gost/raw/master/install.sh | bash -s -- --install; then
+    install_script_url="https://github.com/go-gost/gost/raw/master/install.sh"
+    if [ -n "${GOST_CDN_PREFIX}" ]; then
+        install_script_url="${GOST_CDN_PREFIX}${install_script_url}"
+    fi
+
+    tmp_dir="$(mktemp -d)"
+    install_script="${tmp_dir}/install.sh"
+
+    if ! curl -fsSL "${install_script_url}" -o "${install_script}"; then
+        rm -rf "${tmp_dir}"
+        err "gost install.sh 下载失败：${install_script_url}"
+        exit 1
+    fi
+
+    if [ -n "${GOST_CDN_PREFIX}" ]; then
+        info "已启用 CDN 加速：${GOST_CDN_PREFIX}"
+        escaped_cdn="$(escape_sed_replacement "${GOST_CDN_PREFIX}")"
+        if ! sed "s#base_url=\"https://api.github.com/repos/#base_url=\"${escaped_cdn}https://api.github.com/repos/#" "${install_script}" > "${install_script}.tmp"; then
+            rm -rf "${tmp_dir}"
+            err "替换 install.sh 中 base_url 失败"
+            exit 1
+        fi
+        mv "${install_script}.tmp" "${install_script}"
+    fi
+
+    if ! bash "${install_script}" --install; then
+        rm -rf "${tmp_dir}"
         err "gost 安装失败"
         exit 1
     fi
+    rm -rf "${tmp_dir}"
 
     if command -v gost >/dev/null 2>&1; then
         GOST_BIN="$(command -v gost)"
@@ -541,12 +638,13 @@ interactive_menu() {
 }
 
 main() {
+    parse_cli_args "$@"
     require_root
     detect_system
     ensure_dirs
 
-    if [ "${1:-}" != "" ]; then
-        create_forward "$1"
+    if [ -n "${FORWARD_SPEC}" ]; then
+        create_forward "${FORWARD_SPEC}"
         exit 0
     fi
 
