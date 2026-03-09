@@ -28,6 +28,7 @@ usage() {
   $SCRIPT_NAME list [--table all|filter|nat|mangle|raw]
   $SCRIPT_NAME delete --table 表 --chain 链 --line 行号
   $SCRIPT_NAME delete --rules "端口/协议,端口/协议"
+  $SCRIPT_NAME uninstall
   $SCRIPT_NAME help
 
 规则输入格式:
@@ -48,6 +49,7 @@ usage() {
   $SCRIPT_NAME forward --proto tcp --in-port 8080 --to-ip 192.168.1.10 --to-port 80
   $SCRIPT_NAME delete --table filter --chain INPUT --line 3
   $SCRIPT_NAME delete --rules "80/tcp,443/tcp"
+  $SCRIPT_NAME uninstall
 USAGE
 }
 
@@ -71,6 +73,10 @@ require_root() {
 
 require_iptables() {
   command -v iptables >/dev/null 2>&1 || error "未找到 iptables 命令。"
+}
+
+has_cmd() {
+  command -v "$1" >/dev/null 2>&1
 }
 
 is_valid_protocol() {
@@ -727,6 +733,68 @@ cmd_delete() {
   info "已删除规则: -t $table -D $chain $line"
 }
 
+cmd_uninstall() {
+  info "开始执行一键卸载（清空 IPv4/IPv6 规则并卸载相关包）..."
+
+  if has_cmd iptables; then
+    iptables -F
+    iptables -X
+    iptables -t nat -F
+    iptables -t nat -X
+    iptables -t mangle -F
+    iptables -t mangle -X
+    iptables -t raw -F
+    iptables -t raw -X
+    iptables -P INPUT ACCEPT
+    iptables -P FORWARD ACCEPT
+    iptables -P OUTPUT ACCEPT
+  else
+    warn "未找到 iptables 命令，已跳过 IPv4 规则清理。"
+  fi
+
+  if has_cmd ip6tables; then
+    ip6tables -F
+    ip6tables -X
+    ip6tables -t nat -F 2>/dev/null || true
+    ip6tables -t nat -X 2>/dev/null || true
+    ip6tables -t mangle -F
+    ip6tables -t mangle -X
+    ip6tables -t raw -F
+    ip6tables -t raw -X
+    ip6tables -P INPUT ACCEPT
+    ip6tables -P FORWARD ACCEPT
+    ip6tables -P OUTPUT ACCEPT
+  else
+    warn "未找到 ip6tables 命令，已跳过 IPv6 规则清理。"
+  fi
+
+  if has_cmd rc-service; then
+    rc-service iptables stop 2>/dev/null || true
+    rc-service ip6tables stop 2>/dev/null || true
+  else
+    warn "未找到 rc-service 命令，已跳过服务停止。"
+  fi
+
+  if has_cmd rc-update; then
+    rc-update del iptables 2>/dev/null || true
+    rc-update del ip6tables 2>/dev/null || true
+  else
+    warn "未找到 rc-update 命令，已跳过开机项删除。"
+  fi
+
+  rm -f /etc/iptables/rules-save /etc/iptables/rulesv6-save
+
+  if has_cmd apk; then
+    if ! apk del iptables ip6tables iptables-openrc 2>/dev/null; then
+      apk del iptables iptables-openrc || true
+    fi
+  else
+    warn "未找到 apk 命令，已跳过软件包卸载。"
+  fi
+
+  info "一键卸载已完成。"
+}
+
 show_port_status() {
   local allow_lines deny_lines input_policy filter_rules
   allow_lines=""
@@ -847,6 +915,7 @@ EOF
   echo "2) 端口转发管理"
   echo "3) 规则查看与删除"
   echo "4) 帮助"
+  echo "5) 一键卸载"
   echo "0) 退出"
 }
 
@@ -1064,7 +1133,7 @@ EOF
 }
 
 cmd_menu() {
-  local choice
+  local choice confirm
 
   while true; do
     screen_clear
@@ -1085,6 +1154,18 @@ cmd_menu() {
         screen_clear
         usage
         pause_enter
+        ;;
+      5)
+        read -r -p "该操作会清空所有 IPv4/IPv6 规则并尝试卸载相关软件包，确认继续？[y/N]: " confirm
+        confirm="${confirm,,}"
+        if [[ "$confirm" == "y" || "$confirm" == "yes" ]]; then
+          cmd_uninstall
+          info "卸载流程已执行，脚本将退出。"
+          break
+        else
+          info "已取消卸载。"
+          pause_enter
+        fi
         ;;
       0)
         info "已退出。"
@@ -1140,6 +1221,10 @@ main() {
       require_root
       require_iptables
       cmd_delete "$@"
+      ;;
+    uninstall)
+      require_root
+      cmd_uninstall "$@"
       ;;
     *)
       error "未知命令: $cmd（使用 $SCRIPT_NAME help 查看帮助）"
