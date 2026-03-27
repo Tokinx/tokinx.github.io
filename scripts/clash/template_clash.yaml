@@ -310,6 +310,7 @@ rules:
   - DOMAIN-SUFFIX,replicate.com,编程开发
   - DOMAIN-SUFFIX,replicate.ai,编程开发
   - DOMAIN-SUFFIX,api.replicate.com,编程开发
+  - RULE-SET,Gemini,Google
   # 固定IP服务
   - RULE-SET,PayPal,编程开发
   - RULE-SET,Talkatone,编程开发
@@ -325,7 +326,6 @@ rules:
   - RULE-SET,Download,磁力下载
   - RULE-SET,PrivateTracker,磁力下载
   - RULE-SET,Google,Google
-  - RULE-SET,Gemini,Google
   - RULE-SET,GoogleDrive,Google
   - RULE-SET,Microsoft,Microsoft
   - RULE-SET,OneDrive,Microsoft
