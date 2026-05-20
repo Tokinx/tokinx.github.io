@@ -34,6 +34,7 @@ NC='\033[0m' # No Color
 # 解析命令行参数
 # ────────────────────────────────────────────────────────────
 CDN_PREFIX=""
+PINNED_VERSION=""   # 由 --version 指定，跳过自动检测
 
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -50,6 +51,18 @@ parse_args() {
             --cdn=*)
                 CDN_PREFIX="${1#--cdn=}"
                 CDN_PREFIX="${CDN_PREFIX%/}"
+                shift
+                ;;
+            --version)
+                if [[ -z "${2:-}" ]]; then
+                    err "参数 --version 需要一个版本号，例如 v0.5.0"
+                    exit 1
+                fi
+                PINNED_VERSION="$2"
+                shift 2
+                ;;
+            --version=*)
+                PINNED_VERSION="${1#--version=}"
                 shift
                 ;;
             -h|--help)
@@ -173,17 +186,63 @@ install_deps() {
 # ────────────────────────────────────────────────────────────
 # 下载与安装
 # ────────────────────────────────────────────────────────────
-get_latest_version() {
-    local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
-    local version
 
-    # 若设置了 CDN 前缀，仍通过 GitHub API 获取版本号（API 不走 CDN）
-    version="$(curl -fsSL "$api_url" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')"
-
-    if [[ -z "$version" ]]; then
-        err "无法获取最新版本号，请检查网络连接"
-        exit 1
+# 构造一个经过 CDN 代理的 URL（兼容 ghfast.top 等服务）
+# ghfast.top 的代理格式为: https://ghfast.top/<原始 URL>
+build_cdn_url() {
+    local original_url="$1"
+    if [[ -n "$CDN_PREFIX" ]]; then
+        echo "${CDN_PREFIX}/${original_url}"
+    else
+        echo "$original_url"
     fi
+}
+
+get_latest_version() {
+    # 如果用户通过命令行指定了版本，直接返回
+    if [[ -n "$PINNED_VERSION" ]]; then
+        echo "$PINNED_VERSION"
+        return 0
+    fi
+
+    local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+    local fetch_url version
+
+    # 若设置了 CDN，先尝试通过 CDN 代理访问 GitHub API
+    # （ghfast.top 等主流加速站支持代理完整 https:// URL）
+    if [[ -n "$CDN_PREFIX" ]]; then
+        fetch_url="$(build_cdn_url "$api_url")"
+        step "通过 CDN 获取版本信息: ${fetch_url}"
+    else
+        fetch_url="$api_url"
+    fi
+
+    version="$(curl -fsSL --max-time 15 "$fetch_url" 2>/dev/null \
+        | grep '"tag_name"' \
+        | sed -E 's/.*"([^"]+)".*/\1/' \
+        | head -n1)"
+
+    # CDN 代理失败时，若未设置 CDN 则直接尝试直连（已是直连则不重试）
+    if [[ -z "$version" && -n "$CDN_PREFIX" ]]; then
+        warn "CDN 代理 API 请求失败，尝试直连 GitHub API..."
+        version="$(curl -fsSL --max-time 15 "$api_url" 2>/dev/null \
+            | grep '"tag_name"' \
+            | sed -E 's/.*"([^"]+)".*/\1/' \
+            | head -n1)"
+    fi
+
+    # 所有自动方式均失败，提示用户手动输入
+    if [[ -z "$version" ]]; then
+        warn "无法自动获取最新版本（网络不可达），请手动输入版本号"
+        warn "可在以下地址查看可用版本（需要能访问网络的设备）:"
+        warn "  https://github.com/${GITHUB_REPO}/releases"
+        read -rp "  请输入版本号 (例如 v0.5.0): " version
+        if [[ -z "$version" ]]; then
+            err "版本号不能为空"
+            exit 1
+        fi
+    fi
+
     echo "$version"
 }
 
@@ -204,12 +263,8 @@ build_download_url() {
     local filename="rathole-${target}.zip"
     local github_url="https://github.com/${GITHUB_REPO}/releases/download/${version}/${filename}"
 
-    if [[ -n "$CDN_PREFIX" ]]; then
-        # CDN 前缀拼接，安全处理 URL
-        echo "${CDN_PREFIX}/${github_url}"
-    else
-        echo "$github_url"
-    fi
+    # 无论是否设置 CDN，统一通过 build_cdn_url 处理
+    build_cdn_url "$github_url"
 }
 
 do_install() {
