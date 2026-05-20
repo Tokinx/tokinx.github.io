@@ -11,11 +11,18 @@ CONFIG_ROOT="/etc/rathole"
 SERVER_DIR="${CONFIG_ROOT}/server"
 CLIENT_DIR="${CONFIG_ROOT}/client"
 SYSTEMD_DIR="/etc/systemd/system"
+OPENRC_INIT_DIR="/etc/init.d"
+OPENRC_RUNLEVEL="default"
+RATHOLE_RUN_DIR="/run/rathole"
+RATHOLE_LOG_DIR="/var/log/rathole"
 SERVER_UNIT_TEMPLATE="${SYSTEMD_DIR}/ratholes@.service"
 CLIENT_UNIT_TEMPLATE="${SYSTEMD_DIR}/ratholec@.service"
 CDN_PREFIX=""
 LATEST_VERSION=""
 ARCH_ASSET=""
+INIT_SYSTEM=""
+OS_FAMILY=""
+RATHOLE_NEEDS_GCOMPAT=0
 TMP_DIR=""
 
 info() {
@@ -55,9 +62,36 @@ require_root() {
 	[ "$(id -u)" -eq 0 ] || die "请使用 root 运行此脚本"
 }
 
-require_systemd() {
-	has_cmd systemctl || die "当前系统未安装 systemctl，无法管理 rathole 服务"
-	[ "$(ps -p 1 -o comm= 2>/dev/null | tr -d ' ')" = "systemd" ] || die "当前系统未运行 systemd，无法管理 rathole 服务"
+detect_system() {
+	if [ -n "${INIT_SYSTEM}" ]; then
+		return 0
+	fi
+
+	if [ -f /etc/alpine-release ] || has_cmd rc-service || has_cmd rc-update; then
+		INIT_SYSTEM="openrc"
+		OS_FAMILY="alpine"
+	elif [ "$(ps -p 1 -o comm= 2>/dev/null | tr -d ' ')" = "systemd" ] || has_cmd systemctl; then
+		INIT_SYSTEM="systemd"
+		OS_FAMILY="systemd"
+	else
+		die "当前系统不在支持范围内，仅支持 systemd 或 Alpine OpenRC"
+	fi
+}
+
+require_service_system() {
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			has_cmd systemctl || die "当前系统未安装 systemctl，无法管理 rathole 服务"
+			;;
+		openrc)
+			has_cmd rc-service || die "当前系统未安装 rc-service，无法管理 rathole 服务"
+			has_cmd rc-update || die "当前系统未安装 rc-update，无法管理 rathole 服务"
+			;;
+		*)
+			die "当前系统不在支持范围内"
+			;;
+	esac
 }
 
 trim_value() {
@@ -221,12 +255,19 @@ config_path() {
 unit_name() {
 	local kind="$1"
 	local name="$2"
+	detect_system
 	case "$kind" in
 		server)
-			printf 'ratholes@%s.service' "${name}"
+			case "${INIT_SYSTEM}" in
+				systemd) printf 'ratholes@%s.service' "${name}" ;;
+				openrc) printf 'ratholes-%s' "${name}" ;;
+			esac
 			;;
 		client)
-			printf 'ratholec@%s.service' "${name}"
+			case "${INIT_SYSTEM}" in
+				systemd) printf 'ratholec@%s.service' "${name}" ;;
+				openrc) printf 'ratholec-%s' "${name}" ;;
+			esac
 			;;
 		*)
 			die "未知类型: $1"
@@ -235,19 +276,326 @@ unit_name() {
 }
 
 service_stack_ready() {
-	[ -x "${INSTALL_BIN}" ] && [ -f "${SERVER_UNIT_TEMPLATE}" ] && [ -f "${CLIENT_UNIT_TEMPLATE}" ]
+	detect_system
+	[ -x "${INSTALL_BIN}" ] || return 1
+	case "${INIT_SYSTEM}" in
+		systemd)
+			[ -f "${SERVER_UNIT_TEMPLATE}" ] && [ -f "${CLIENT_UNIT_TEMPLATE}" ]
+			;;
+		openrc)
+			has_cmd rc-service && has_cmd rc-update
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+service_definition_path() {
+	local kind="$1"
+	local name="$2"
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			case "$kind" in
+				server)
+					printf '%s/ratholes@.service' "${SYSTEMD_DIR}"
+					;;
+				client)
+					printf '%s/ratholec@.service' "${SYSTEMD_DIR}"
+					;;
+				*)
+					die "未知类型: $1"
+					;;
+			esac
+			;;
+		openrc)
+			printf '%s/%s' "${OPENRC_INIT_DIR}" "$(unit_name "${kind}" "${name}")"
+			;;
+		*)
+			die "当前系统不在支持范围内"
+			;;
+	esac
+}
+
+service_log_path() {
+	local kind="$1"
+	local name="$2"
+	printf '%s/%s.log' "${RATHOLE_LOG_DIR}" "$(unit_name "${kind}" "${name}")"
+}
+
+service_pid_path() {
+	local kind="$1"
+	local name="$2"
+	printf '%s/%s.pid' "${RATHOLE_RUN_DIR}" "$(unit_name "${kind}" "${name}")"
 }
 
 unit_active_state() {
-	systemctl is-active "$1" 2>/dev/null || true
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			systemctl is-active "$1" 2>/dev/null || true
+			;;
+		openrc)
+			if rc-service "$1" status >/dev/null 2>&1; then
+				printf 'started'
+			else
+				printf 'stopped'
+			fi
+			;;
+		*)
+			printf 'unknown'
+			;;
+	esac
 }
 
 unit_enabled_state() {
-	systemctl is-enabled "$1" 2>/dev/null || true
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			systemctl is-enabled "$1" 2>/dev/null || true
+			;;
+		openrc)
+			if [ -e "/etc/runlevels/${OPENRC_RUNLEVEL}/$1" ]; then
+				printf 'enabled'
+			else
+				printf 'disabled'
+			fi
+			;;
+		*)
+			printf 'unknown'
+			;;
+	esac
 }
 
 unit_load_state() {
-	systemctl show -p LoadState --value "$1" 2>/dev/null || true
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			systemctl show -p LoadState --value "$1" 2>/dev/null || true
+			;;
+		openrc)
+			if [ -f "${OPENRC_INIT_DIR}/$1" ]; then
+				printf 'loaded'
+			else
+				printf 'not-found'
+			fi
+			;;
+		*)
+			printf 'unknown'
+			;;
+	esac
+}
+
+service_daemon_reload() {
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			systemctl daemon-reload
+			;;
+		openrc)
+			: # OpenRC does not need a daemon reload for init scripts
+			;;
+	esac
+}
+
+service_enable_now() {
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			systemctl enable --now "$1"
+			;;
+		openrc)
+			rc-update add "$1" "${OPENRC_RUNLEVEL}" >/dev/null 2>&1 || true
+			rc-service "$1" start
+			;;
+	esac
+}
+
+service_restart_unit() {
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			systemctl restart "$1"
+			;;
+		openrc)
+			rc-service "$1" restart
+			;;
+	esac
+}
+
+service_stop_unit() {
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			systemctl stop "$1"
+			;;
+		openrc)
+			rc-service "$1" stop
+			;;
+	esac
+}
+
+service_disable_unit() {
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			systemctl disable "$1"
+			;;
+		openrc)
+			rc-update del "$1" "${OPENRC_RUNLEVEL}" >/dev/null 2>&1 || true
+			;;
+	esac
+}
+
+service_status_detail() {
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			systemctl status --no-pager --full "$1"
+			;;
+		openrc)
+			rc-service "$1" status
+			;;
+	esac
+}
+
+service_logs_unit() {
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			journalctl -u "$1" -n 100 --no-pager
+			;;
+		openrc)
+			local log_file="${RATHOLE_LOG_DIR}/${1}.log"
+			if [ -f "${log_file}" ]; then
+				tail -n 100 "${log_file}"
+			else
+				warn "日志文件不存在: ${log_file}"
+			fi
+			;;
+	esac
+}
+
+ensure_alpine_compat_packages() {
+	detect_system
+	if [ "${INIT_SYSTEM}" = "openrc" ] && [ "${OS_FAMILY}" = "alpine" ] && [ "${RATHOLE_NEEDS_GCOMPAT}" = "1" ]; then
+		info "Alpine x86_64 检测到 glibc 兼容需求，正在安装 gcompat"
+		if ! ensure_packages gcompat; then
+			warn "gcompat 安装失败，尝试 libc6-compat"
+			ensure_packages libc6-compat
+		fi
+	fi
+}
+
+write_openrc_service_script() {
+	local kind="$1"
+	local name="$2"
+	local script_file
+	local config_file
+	local pid_file
+	local log_file
+	local mode_flag=""
+	local description=""
+	local service_name=""
+
+	service_name="$(unit_name "${kind}" "${name}")"
+	script_file="$(service_definition_path "${kind}" "${name}")"
+	config_file="$(config_path "${kind}" "${name}")"
+	pid_file="$(service_pid_path "${kind}" "${name}")"
+	log_file="$(service_log_path "${kind}" "${name}")"
+
+	case "${kind}" in
+		server)
+			mode_flag="-s"
+			description="Rathole Server Service"
+			;;
+		client)
+			mode_flag="-c"
+			description="Rathole Client Service"
+			;;
+		*)
+			die "未知类型: ${kind}"
+			;;
+	esac
+
+	cat > "${script_file}" <<EOF
+#!/sbin/openrc-run
+description="${description}"
+command="${INSTALL_BIN}"
+pidfile="${pid_file}"
+
+depend() {
+	use net
+}
+
+start_pre() {
+	checkpath -d -m 0755 "${RATHOLE_RUN_DIR}" "${RATHOLE_LOG_DIR}"
+	[ -f "${config_file}" ] || return 1
+}
+
+start() {
+	ebegin "Starting ${service_name}"
+	start-stop-daemon --start --background --make-pidfile --pidfile "${pid_file}" --exec /bin/sh -- -c "exec ${INSTALL_BIN} ${mode_flag} ${config_file} >>${log_file} 2>&1"
+	eend \$?
+}
+
+stop() {
+	ebegin "Stopping ${service_name}"
+	start-stop-daemon --stop --pidfile "${pid_file}"
+	eend \$?
+}
+EOF
+
+	chmod 755 "${script_file}"
+}
+
+sync_service_definitions() {
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			write_systemd_templates
+			;;
+		openrc)
+			local kind=""
+			local name=""
+			local dir=""
+			local -a names=()
+
+			mkdir -p "${RATHOLE_RUN_DIR}" "${RATHOLE_LOG_DIR}"
+			for kind in server client; do
+				dir="$(kind_dir "${kind}")"
+				mapfile -t names < <(collect_kind_names "${dir}")
+				for name in "${names[@]}"; do
+					write_openrc_service_script "${kind}" "${name}"
+				done
+			done
+			;;
+	esac
+}
+
+ensure_service_definition() {
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			write_systemd_templates
+			;;
+		openrc)
+			write_openrc_service_script "$1" "$2"
+			;;
+	esac
+}
+
+remove_service_definition() {
+	detect_system
+	case "${INIT_SYSTEM}" in
+		systemd)
+			: # systemd 仅使用全局模板，删除单个配置不需要移除模板
+			;;
+		openrc)
+			rm -f "$(service_definition_path "$1" "$2")"
+			;;
+	esac
 }
 
 ensure_packages() {
@@ -284,6 +632,8 @@ ensure_download_tools() {
 
 detect_arch_asset() {
 	local machine
+	detect_system
+	RATHOLE_NEEDS_GCOMPAT=0
 	machine="$(uname -m)"
 
 	case "${machine}" in
@@ -304,6 +654,14 @@ detect_arch_asset() {
 			die "暂不支持当前架构: ${machine}"
 			;;
 	esac
+
+	if [ "${INIT_SYSTEM}" = "openrc" ] && [ "${OS_FAMILY}" = "alpine" ]; then
+		case "${machine}" in
+			x86_64|amd64)
+				RATHOLE_NEEDS_GCOMPAT=1
+				;;
+		esac
+	fi
 
 	info "检测到系统架构: ${machine}"
 	info "对应安装包: ${ARCH_ASSET}"
@@ -417,12 +775,14 @@ prepare_install_dirs() {
 
 install_rathole() {
 	require_root
-	require_systemd
+	require_service_system
 	ensure_download_tools
+	detect_system
 	detect_arch_asset
+	ensure_alpine_compat_packages
 	fetch_latest_version
 	prepare_install_dirs
-	write_systemd_templates
+	sync_service_definitions
 
 	TMP_DIR="$(mktemp -d)"
 	local archive="${TMP_DIR}/${ARCH_ASSET}"
@@ -441,11 +801,16 @@ install_rathole() {
 	[ -n "${binary_path}" ] || die "压缩包中未找到 rathole 可执行文件"
 
 	install -m 755 "${binary_path}" "${INSTALL_BIN}"
-	systemctl daemon-reload
+	sync_service_definitions
+	service_daemon_reload
 
 	success "rathole ${LATEST_VERSION} 安装完成"
 	info "二进制路径: ${INSTALL_BIN}"
-	info "服务模板: ${SERVER_UNIT_TEMPLATE} 和 ${CLIENT_UNIT_TEMPLATE}"
+	if [ "${INIT_SYSTEM}" = "systemd" ]; then
+		info "服务模板: ${SERVER_UNIT_TEMPLATE} 和 ${CLIENT_UNIT_TEMPLATE}"
+	else
+		info "OpenRC 服务脚本将按配置自动生成于 ${OPENRC_INIT_DIR}"
+	fi
 	info "配置目录: ${SERVER_DIR} 和 ${CLIENT_DIR}"
 }
 
@@ -599,7 +964,7 @@ show_target_status() {
 		enabled="$(unit_enabled_state "${unit}")"
 		printf '%-8s %-24s %-12s %-12s %s\n' "${kind}" "${target}" "${active:-unknown}" "${enabled:-unknown}" "${file}"
 		if [ "$(unit_load_state "${unit}")" = "loaded" ]; then
-			systemctl status --no-pager --full "${unit}"
+			service_status_detail "${unit}"
 		else
 			warn "系统中未加载单元: ${unit}"
 		fi
@@ -653,7 +1018,7 @@ restart_units() {
 	fi
 
 	for unit in "${units[@]}"; do
-		systemctl restart "${unit}"
+		service_restart_unit "${unit}"
 		success "已重启: ${unit}"
 	done
 }
@@ -661,7 +1026,6 @@ restart_units() {
 show_logs() {
 	local target="${1:-}"
 	local -a units=()
-	local journal_args=()
 	local unit=""
 
 	require_service_stack
@@ -672,10 +1036,9 @@ show_logs() {
 	fi
 
 	for unit in "${units[@]}"; do
-		journal_args+=("-u" "${unit}")
+		service_logs_unit "${unit}"
+		printf '\n'
 	done
-
-	journalctl "${journal_args[@]}" -n 100 --no-pager
 }
 
 write_server_config() {
@@ -763,8 +1126,9 @@ create_config() {
 			;;
 	esac
 
-	systemctl daemon-reload
-	systemctl enable --now "$(unit_name "${kind}" "${name}")"
+	ensure_service_definition "${kind}" "${name}"
+	service_daemon_reload
+	service_enable_now "$(unit_name "${kind}" "${name}")"
 	success "已创建并启动 ${kind_label "${kind}"}配置: ${name}"
 	info "配置文件: ${file}"
 }
@@ -797,8 +1161,8 @@ edit_config() {
 
 	if service_stack_ready; then
 		unit="$(unit_name "${kind}" "${name}")"
-		systemctl daemon-reload
-		systemctl restart "${unit}"
+		service_daemon_reload
+		service_restart_unit "${unit}"
 		success "已保存并重启: ${unit}"
 	else
 		warn "rathole 服务尚未安装，已保存配置但未重启"
@@ -828,9 +1192,10 @@ delete_config() {
 	fi
 
 	unit="$(unit_name "${kind}" "${name}")"
-	systemctl stop "${unit}" >/dev/null 2>&1 || true
-	systemctl disable "${unit}" >/dev/null 2>&1 || true
-	systemctl daemon-reload
+	service_stop_unit "${unit}" >/dev/null 2>&1 || true
+	service_disable_unit "${unit}" >/dev/null 2>&1 || true
+	service_daemon_reload
+	remove_service_definition "${kind}" "${name}"
 
 	rm -f "${file}"
 	dir="$(kind_dir "${kind}")"
@@ -887,7 +1252,7 @@ restart_kind() {
 	fi
 
 	for unit in "${units[@]}"; do
-		systemctl restart "${unit}"
+		service_restart_unit "${unit}"
 		success "已重启: ${unit}"
 	done
 }
@@ -896,7 +1261,6 @@ logs_kind() {
 	local kind="$1"
 	local target="${2:-}"
 	local -a units=()
-	local journal_args=()
 	local names_dir=""
 	local -a names=()
 	local name=""
@@ -919,10 +1283,9 @@ logs_kind() {
 	fi
 
 	for unit in "${units[@]}"; do
-		journal_args+=("-u" "${unit}")
+		service_logs_unit "${unit}"
+		printf '\n'
 	done
-
-	journalctl "${journal_args[@]}" -n 100 --no-pager
 }
 
 global_restart() {
@@ -941,7 +1304,7 @@ global_restart() {
 	fi
 
 	for unit in "${units[@]}"; do
-		systemctl restart "${unit}"
+		service_restart_unit "${unit}"
 		success "已重启: ${unit}"
 	done
 }
@@ -949,7 +1312,6 @@ global_restart() {
 global_logs() {
 	local target="${1:-}"
 	local -a units=()
-	local journal_args=()
 	local unit=""
 
 	require_service_stack
@@ -963,10 +1325,9 @@ global_logs() {
 	fi
 
 	for unit in "${units[@]}"; do
-		journal_args+=("-u" "${unit}")
+		service_logs_unit "${unit}"
+		printf '\n'
 	done
-
-	journalctl "${journal_args[@]}" -n 100 --no-pager
 }
 
 global_list() {
@@ -990,6 +1351,10 @@ show_help() {
 	server <action> [name]          管理服务端配置
 	client <action> [name]          管理客户端配置
 	menu                            打开交互菜单
+
+支持平台:
+	systemd / Alpine OpenRC
+	Alpine x86_64 会自动安装 glibc 兼容包 gcompat（必要时回退到 libc6-compat）
 
 服务端或客户端 action:
 	add                             交互式创建配置并启动
@@ -1095,24 +1460,34 @@ uninstall_rathole() {
 		return 0
 	fi
 
-	if service_stack_ready; then
-		for kind in server client; do
-			dir="$(kind_dir "${kind}")"
-			for file in "${dir}"/*.toml; do
-				[ -e "${file}" ] || continue
-				name="$(basename "${file}" .toml)"
-				units+=("$(unit_name "${kind}" "${name}")")
-			done
+	for kind in server client; do
+		dir="$(kind_dir "${kind}")"
+		for file in "${dir}"/*.toml; do
+			[ -e "${file}" ] || continue
+			name="$(basename "${file}" .toml)"
+			units+=("$(unit_name "${kind}" "${name}")")
+			remove_service_definition "${kind}" "${name}"
 		done
+	done
 
-		for unit in "${units[@]}"; do
-			systemctl stop "${unit}" >/dev/null 2>&1 || true
-			systemctl disable "${unit}" >/dev/null 2>&1 || true
+	if [ "${INIT_SYSTEM}" = "openrc" ]; then
+		for file in "${OPENRC_INIT_DIR}"/ratholes-* "${OPENRC_INIT_DIR}"/ratholec-*; do
+			[ -e "${file}" ] || continue
+			name="$(basename "${file}")"
+			units+=("${name}")
+			rm -f "${file}"
 		done
 	fi
 
-	rm -f "${SERVER_UNIT_TEMPLATE}" "${CLIENT_UNIT_TEMPLATE}"
-	systemctl daemon-reload
+	for unit in "${units[@]}"; do
+		service_stop_unit "${unit}" >/dev/null 2>&1 || true
+		service_disable_unit "${unit}" >/dev/null 2>&1 || true
+	done
+
+	if [ "${INIT_SYSTEM}" = "systemd" ]; then
+		rm -f "${SERVER_UNIT_TEMPLATE}" "${CLIENT_UNIT_TEMPLATE}"
+	fi
+	service_daemon_reload
 
 	if [ -e "${INSTALL_BIN}" ]; then
 		rm -f "${INSTALL_BIN}"
@@ -1254,6 +1629,8 @@ main() {
 
 	if [ "$#" -eq 0 ]; then
 		if [ -t 0 ]; then
+			require_root
+			require_service_system
 			show_menu
 			exit 0
 		fi
@@ -1266,7 +1643,7 @@ main() {
 
 	if [ "${command}" != "help" ] && [ "${command}" != "-h" ] && [ "${command}" != "--help" ]; then
 		require_root
-		require_systemd
+		require_service_system
 	fi
 
 	case "${command}" in
