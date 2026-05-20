@@ -115,7 +115,8 @@ detect_arch() {
     case "$machine" in
         x86_64)  ARCH="x86_64" ;;
         aarch64|arm64) ARCH="aarch64" ;;
-        armv7*|armv6*) ARCH="armv7" ;;
+        armv7*)  ARCH="armv7" ;;
+        armv6*)  ARCH="armv6" ;;
         *)
             err "不支持的 CPU 架构: $machine"
             exit 1
@@ -190,12 +191,14 @@ build_download_url() {
     local version="$1"
     local arch="$2"
 
-    # 架构映射到 rathole 的发布文件名
+    # 架构映射到 rathole 的发布文件名（以 GitHub API 实际 asset 名为准）
+    # 参考: https://github.com/rathole-org/rathole/releases/latest
     local target
     case "$arch" in
-        x86_64)  target="x86_64-unknown-linux-musl" ;;
+        x86_64)  target="x86_64-unknown-linux-gnu" ;;
         aarch64) target="aarch64-unknown-linux-musl" ;;
         armv7)   target="armv7-unknown-linux-musleabihf" ;;
+        armv6)   target="arm-unknown-linux-musleabihf" ;;
     esac
 
     local filename="rathole-${target}.zip"
