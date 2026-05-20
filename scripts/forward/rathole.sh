@@ -1,1686 +1,1039 @@
 #!/usr/bin/env bash
+# ============================================================
+#  rathole 一键管理脚本
+#  支持系统: Debian / Ubuntu / Alpine Linux
+#  支持架构: x86_64, aarch64, armv7
+#  用法: bash rathole.sh [--cdn <url>]
+# ============================================================
+
 set -euo pipefail
 
-SCRIPT_NAME="$(basename "$0")"
-REPO_OWNER="rathole-org"
-REPO_NAME="rathole"
-GITHUB_API_LATEST="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
-GITHUB_RELEASE_BASE="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download"
-INSTALL_BIN="/usr/local/bin/rathole"
-CONFIG_ROOT="/etc/rathole"
-SERVER_DIR="${CONFIG_ROOT}/server"
-CLIENT_DIR="${CONFIG_ROOT}/client"
-SYSTEMD_DIR="/etc/systemd/system"
-OPENRC_INIT_DIR="/etc/init.d"
-OPENRC_RUNLEVEL="default"
-RATHOLE_RUN_DIR="/run/rathole"
-RATHOLE_LOG_DIR="/var/log/rathole"
-SERVER_UNIT_TEMPLATE="${SYSTEMD_DIR}/ratholes@.service"
-CLIENT_UNIT_TEMPLATE="${SYSTEMD_DIR}/ratholec@.service"
+# ────────────────────────────────────────────────────────────
+# 全局常量
+# ────────────────────────────────────────────────────────────
+readonly SCRIPT_VERSION="1.0.0"
+readonly GITHUB_REPO="rathole-org/rathole"
+readonly INSTALL_DIR="/usr/local/bin"
+readonly CONFIG_DIR="/etc/rathole"
+readonly LOG_DIR="/var/log/rathole"
+readonly SERVICE_NAME_SERVER="rathole-server"
+readonly SERVICE_NAME_CLIENT="rathole-client"
+readonly BINARY="rathole"
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m' # No Color
+
+# ────────────────────────────────────────────────────────────
+# 解析命令行参数
+# ────────────────────────────────────────────────────────────
 CDN_PREFIX=""
-LATEST_VERSION=""
-ARCH_ASSET=""
-INIT_SYSTEM=""
-OS_FAMILY=""
-RATHOLE_NEEDS_GCOMPAT=0
-TMP_DIR=""
 
-info() {
-	printf '[INFO] %s\n' "$*"
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --cdn)
+                if [[ -z "${2:-}" ]]; then
+                    err "参数 --cdn 需要一个 URL 值"
+                    exit 1
+                fi
+                # 去除末尾斜杠，防止 URL 拼接双斜杠
+                CDN_PREFIX="${2%/}"
+                shift 2
+                ;;
+            --cdn=*)
+                CDN_PREFIX="${1#--cdn=}"
+                CDN_PREFIX="${CDN_PREFIX%/}"
+                shift
+                ;;
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
 }
 
-warn() {
-	printf '[WARN] %s\n' "$*" >&2
+show_usage() {
+    echo "用法: $0 [选项]"
+    echo ""
+    echo "选项:"
+    echo "  --cdn <url>    指定 GitHub 下载加速前缀，例如 https://ghfast.top"
+    echo "  -h, --help     显示帮助信息"
+    echo ""
+    echo "示例:"
+    echo "  bash $0"
+    echo "  bash $0 --cdn https://ghfast.top"
 }
 
-error() {
-	printf '[ERROR] %s\n' "$*" >&2
+# ────────────────────────────────────────────────────────────
+# 输出工具函数
+# ────────────────────────────────────────────────────────────
+info()    { echo -e "${GREEN}[INFO]${NC}  $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+err()     { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+title()   { echo -e "\n${BOLD}${CYAN}══════════════════════════════${NC}"; echo -e "${BOLD}${CYAN}  $*${NC}"; echo -e "${BOLD}${CYAN}══════════════════════════════${NC}"; }
+step()    { echo -e "${BLUE}  ▶${NC} $*"; }
+success() { echo -e "${GREEN}  ✔${NC} $*"; }
+
+# ────────────────────────────────────────────────────────────
+# 系统检测
+# ────────────────────────────────────────────────────────────
+detect_os() {
+    if [[ -f /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        OS_ID="${ID:-unknown}"
+        OS_VERSION="${VERSION_ID:-}"
+    else
+        OS_ID="unknown"
+        OS_VERSION=""
+    fi
+
+    case "$OS_ID" in
+        debian|ubuntu|linuxmint|raspbian) OS_FAMILY="debian" ;;
+        alpine)                           OS_FAMILY="alpine" ;;
+        *)
+            warn "未经测试的系统: $OS_ID，将尝试以 debian 模式运行"
+            OS_FAMILY="debian"
+            ;;
+    esac
 }
 
-die() {
-	error "$1"
-	exit 1
+detect_arch() {
+    local machine
+    machine="$(uname -m)"
+    case "$machine" in
+        x86_64)  ARCH="x86_64" ;;
+        aarch64|arm64) ARCH="aarch64" ;;
+        armv7*|armv6*) ARCH="armv7" ;;
+        *)
+            err "不支持的 CPU 架构: $machine"
+            exit 1
+            ;;
+    esac
 }
 
-success() {
-	printf '[OK] %s\n' "$*"
-}
-
-cleanup() {
-	if [ -n "${TMP_DIR}" ] && [ -d "${TMP_DIR}" ]; then
-		rm -rf "${TMP_DIR}"
-	fi
-}
-
-trap cleanup EXIT INT TERM
-
-has_cmd() {
-	command -v "$1" >/dev/null 2>&1
+detect_init() {
+    if command -v systemctl &>/dev/null && systemctl --version &>/dev/null 2>&1; then
+        INIT_SYSTEM="systemd"
+    elif [[ -f /sbin/openrc-run ]] || command -v rc-service &>/dev/null; then
+        INIT_SYSTEM="openrc"
+    else
+        INIT_SYSTEM="none"
+        warn "未检测到 systemd 或 OpenRC，服务管理功能将不可用"
+    fi
 }
 
 require_root() {
-	[ "$(id -u)" -eq 0 ] || die "请使用 root 运行此脚本"
+    if [[ "$(id -u)" -ne 0 ]]; then
+        err "此操作需要 root 权限，请使用 sudo 或以 root 身份运行"
+        exit 1
+    fi
 }
 
-detect_system() {
-	if [ -n "${INIT_SYSTEM}" ]; then
-		return 0
-	fi
+# ────────────────────────────────────────────────────────────
+# 依赖检查与安装
+# ────────────────────────────────────────────────────────────
+install_deps() {
+    local deps=("curl" "wget" "unzip" "jq")
+    local missing=()
 
-	if [ -f /etc/alpine-release ] || has_cmd rc-service || has_cmd rc-update; then
-		INIT_SYSTEM="openrc"
-		OS_FAMILY="alpine"
-	elif [ "$(ps -p 1 -o comm= 2>/dev/null | tr -d ' ')" = "systemd" ] || has_cmd systemctl; then
-		INIT_SYSTEM="systemd"
-		OS_FAMILY="systemd"
-	else
-		die "当前系统不在支持范围内，仅支持 systemd 或 Alpine OpenRC"
-	fi
+    for dep in "${deps[@]}"; do
+        command -v "$dep" &>/dev/null || missing+=("$dep")
+    done
+
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    step "安装缺失依赖: ${missing[*]}"
+    case "$OS_FAMILY" in
+        debian)
+            apt-get update -qq
+            apt-get install -y -qq "${missing[@]}"
+            ;;
+        alpine)
+            apk update -q
+            apk add -q "${missing[@]}"
+            ;;
+    esac
 }
 
-require_service_system() {
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			has_cmd systemctl || die "当前系统未安装 systemctl，无法管理 rathole 服务"
-			;;
-		openrc)
-			has_cmd rc-service || die "当前系统未安装 rc-service，无法管理 rathole 服务"
-			has_cmd rc-update || die "当前系统未安装 rc-update，无法管理 rathole 服务"
-			;;
-		*)
-			die "当前系统不在支持范围内"
-			;;
-	esac
+# ────────────────────────────────────────────────────────────
+# 下载与安装
+# ────────────────────────────────────────────────────────────
+get_latest_version() {
+    local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+    local version
+
+    # 若设置了 CDN 前缀，仍通过 GitHub API 获取版本号（API 不走 CDN）
+    version="$(curl -fsSL "$api_url" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')"
+
+    if [[ -z "$version" ]]; then
+        err "无法获取最新版本号，请检查网络连接"
+        exit 1
+    fi
+    echo "$version"
 }
 
-trim_value() {
-	local value="$1"
-	value="${value#"${value%%[![:space:]]*}"}"
-	value="${value%"${value##*[![:space:]]}"}"
-	printf '%s' "$value"
+build_download_url() {
+    local version="$1"
+    local arch="$2"
+
+    # 架构映射到 rathole 的发布文件名
+    local target
+    case "$arch" in
+        x86_64)  target="x86_64-unknown-linux-musl" ;;
+        aarch64) target="aarch64-unknown-linux-musl" ;;
+        armv7)   target="armv7-unknown-linux-musleabihf" ;;
+    esac
+
+    local filename="rathole-${target}.zip"
+    local github_url="https://github.com/${GITHUB_REPO}/releases/download/${version}/${filename}"
+
+    if [[ -n "$CDN_PREFIX" ]]; then
+        # CDN 前缀拼接，安全处理 URL
+        echo "${CDN_PREFIX}/${github_url}"
+    else
+        echo "$github_url"
+    fi
 }
 
-toml_escape() {
-	local value="$1"
-	value="${value//\\/\\\\}"
-	value="${value//\"/\\\"}"
-	printf '%s' "$value"
+do_install() {
+    require_root
+    title "安装 rathole"
+
+    detect_os
+    detect_arch
+    detect_init
+    install_deps
+
+    step "检测系统: ${OS_FAMILY} / ${ARCH} / init:${INIT_SYSTEM}"
+
+    # 获取版本
+    local version
+    step "获取最新版本..."
+    version="$(get_latest_version)"
+    success "最新版本: ${version}"
+
+    # 构建下载地址
+    local download_url
+    download_url="$(build_download_url "$version" "$ARCH")"
+    step "下载地址: ${download_url}"
+
+    # 创建临时目录（在工作目录内，避免权限问题）
+    local tmp_dir
+    tmp_dir="$(mktemp -d /tmp/rathole-install-XXXXXX)"
+    # shellcheck disable=SC2064
+    trap "rm -rf '${tmp_dir}'" EXIT
+
+    local zip_file="${tmp_dir}/rathole.zip"
+
+    step "下载 rathole ${version}..."
+    if ! curl -fsSL -o "$zip_file" "$download_url"; then
+        err "下载失败: $download_url"
+        exit 1
+    fi
+    success "下载完成"
+
+    step "解压并安装..."
+    unzip -q "$zip_file" -d "$tmp_dir"
+
+    # 查找二进制文件
+    local binary_path
+    binary_path="$(find "$tmp_dir" -type f -name "$BINARY" | head -n1)"
+    if [[ -z "$binary_path" ]]; then
+        err "解压后未找到 rathole 可执行文件"
+        exit 1
+    fi
+
+    chmod +x "$binary_path"
+    mv "$binary_path" "${INSTALL_DIR}/${BINARY}"
+    success "安装到 ${INSTALL_DIR}/${BINARY}"
+
+    # 创建目录
+    mkdir -p "$CONFIG_DIR" "$LOG_DIR"
+    chmod 750 "$CONFIG_DIR"
+    chmod 755 "$LOG_DIR"
+    success "配置目录: ${CONFIG_DIR}"
+
+    # 安装服务
+    case "$INIT_SYSTEM" in
+        systemd) install_systemd_services ;;
+        openrc)  install_openrc_services ;;
+        none)    warn "跳过服务安装（未检测到 init 系统）" ;;
+    esac
+
+    success "rathole ${version} 安装完成！"
+    echo ""
+    info "提示: 使用本脚本管理 rathole（运行脚本查看菜单）"
 }
 
-validate_name() {
-	local name="$1"
-	[[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]
+# ────────────────────────────────────────────────────────────
+# Systemd 服务
+# ────────────────────────────────────────────────────────────
+install_systemd_services() {
+    step "安装 systemd 服务..."
+
+    # Server 服务
+    cat > "/etc/systemd/system/${SERVICE_NAME_SERVER}.service" <<'SVCEOF'
+[Unit]
+Description=rathole Server
+Documentation=https://github.com/rathole-org/rathole
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/rathole /etc/rathole/server.toml
+Restart=on-failure
+RestartSec=5s
+StandardOutput=append:/var/log/rathole/server.log
+StandardError=append:/var/log/rathole/server.log
+LimitNOFILE=65536
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log/rathole
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+    # Client 服务
+    cat > "/etc/systemd/system/${SERVICE_NAME_CLIENT}.service" <<'SVCEOF'
+[Unit]
+Description=rathole Client
+Documentation=https://github.com/rathole-org/rathole
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/rathole /etc/rathole/client.toml
+Restart=on-failure
+RestartSec=5s
+StandardOutput=append:/var/log/rathole/client.log
+StandardError=append:/var/log/rathole/client.log
+LimitNOFILE=65536
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log/rathole
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+    systemctl daemon-reload
+    success "systemd 服务已安装"
 }
 
-normalize_cdn_prefix() {
-	local cdn="$1"
-	case "$cdn" in
-		http://*|https://*)
-			CDN_PREFIX="${cdn%/}"
-			;;
-		*)
-			die "--cdn 需要以 http:// 或 https:// 开头"
-			;;
-	esac
-}
+# ────────────────────────────────────────────────────────────
+# OpenRC 服务（Alpine）
+# ────────────────────────────────────────────────────────────
+install_openrc_services() {
+    step "安装 OpenRC 服务..."
 
-apply_cdn_prefix() {
-	local url="$1"
-	if [ -n "${CDN_PREFIX}" ]; then
-		printf '%s/%s' "${CDN_PREFIX}" "${url}"
-	else
-		printf '%s' "${url}"
-	fi
-}
-
-prompt_value() {
-	local label="$1"
-	local default_value="$2"
-	local out_var="$3"
-	local value=""
-
-	while true; do
-		if [ -n "${default_value}" ]; then
-			read -r -p "${label} [${default_value}]: " value || true
-		else
-			read -r -p "${label}: " value || true
-		fi
-
-		value="$(trim_value "${value:-${default_value}}")"
-
-		if [ -n "${value}" ] || [ -n "${default_value}" ]; then
-			printf -v "${out_var}" '%s' "${value}"
-			return 0
-		fi
-
-		warn "该项不能为空"
-	done
-}
-
-prompt_name() {
-	local label="$1"
-	local default_value="$2"
-	local out_var="$3"
-	local value=""
-
-	while true; do
-		prompt_value "${label}" "${default_value}" value
-		if validate_name "${value}"; then
-			printf -v "${out_var}" '%s' "${value}"
-			return 0
-		fi
-		warn "名称只能包含字母、数字、下划线和连字符，且必须以字母或数字开头"
-	done
-}
-
-prompt_port() {
-	local label="$1"
-	local default_value="$2"
-	local out_var="$3"
-	local value=""
-
-	while true; do
-		prompt_value "${label}" "${default_value}" value
-		if [[ "${value}" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= 65535 )); then
-			printf -v "${out_var}" '%s' "${value}"
-			return 0
-		fi
-		warn "端口必须是 1 到 65535 之间的数字"
-	done
-}
-
-confirm() {
-	local prompt_text="$1"
-	local answer=""
-	read -r -p "${prompt_text} [y/N]: " answer || true
-	case "${answer}" in
-		y|Y|yes|YES)
-			return 0
-			;;
-		*)
-			return 1
-			;;
-	esac
-}
-
-generate_token() {
-	if [ -r /proc/sys/kernel/random/uuid ]; then
-		tr -d '-' < /proc/sys/kernel/random/uuid
-		return 0
-	fi
-
-	if has_cmd openssl; then
-		openssl rand -hex 16
-		return 0
-	fi
-
-	date +%s%N
-}
-
-kind_dir() {
-	case "$1" in
-		server)
-			printf '%s' "${SERVER_DIR}"
-			;;
-		client)
-			printf '%s' "${CLIENT_DIR}"
-			;;
-		*)
-			die "未知类型: $1"
-			;;
-	esac
-}
-
-kind_label() {
-	case "$1" in
-		server)
-			printf '服务端'
-			;;
-		client)
-			printf '客户端'
-			;;
-		*)
-			printf '%s' "$1"
-			;;
-	esac
-}
-
-config_path() {
-	local kind="$1"
-	local name="$2"
-	printf '%s/%s.toml' "$(kind_dir "${kind}")" "${name}"
-}
-
-unit_name() {
-	local kind="$1"
-	local name="$2"
-	detect_system
-	case "$kind" in
-		server)
-			case "${INIT_SYSTEM}" in
-				systemd) printf 'ratholes@%s.service' "${name}" ;;
-				openrc) printf 'ratholes-%s' "${name}" ;;
-			esac
-			;;
-		client)
-			case "${INIT_SYSTEM}" in
-				systemd) printf 'ratholec@%s.service' "${name}" ;;
-				openrc) printf 'ratholec-%s' "${name}" ;;
-			esac
-			;;
-		*)
-			die "未知类型: $1"
-			;;
-	esac
-}
-
-service_stack_ready() {
-	detect_system
-	[ -x "${INSTALL_BIN}" ] || return 1
-	case "${INIT_SYSTEM}" in
-		systemd)
-			[ -f "${SERVER_UNIT_TEMPLATE}" ] && [ -f "${CLIENT_UNIT_TEMPLATE}" ]
-			;;
-		openrc)
-			has_cmd rc-service && has_cmd rc-update
-			;;
-		*)
-			return 1
-			;;
-	esac
-}
-
-service_definition_path() {
-	local kind="$1"
-	local name="$2"
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			case "$kind" in
-				server)
-					printf '%s/ratholes@.service' "${SYSTEMD_DIR}"
-					;;
-				client)
-					printf '%s/ratholec@.service' "${SYSTEMD_DIR}"
-					;;
-				*)
-					die "未知类型: $1"
-					;;
-			esac
-			;;
-		openrc)
-			printf '%s/%s' "${OPENRC_INIT_DIR}" "$(unit_name "${kind}" "${name}")"
-			;;
-		*)
-			die "当前系统不在支持范围内"
-			;;
-	esac
-}
-
-service_log_path() {
-	local kind="$1"
-	local name="$2"
-	printf '%s/%s.log' "${RATHOLE_LOG_DIR}" "$(unit_name "${kind}" "${name}")"
-}
-
-service_pid_path() {
-	local kind="$1"
-	local name="$2"
-	printf '%s/%s.pid' "${RATHOLE_RUN_DIR}" "$(unit_name "${kind}" "${name}")"
-}
-
-unit_active_state() {
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			systemctl is-active "$1" 2>/dev/null || true
-			;;
-		openrc)
-			if rc-service "$1" status >/dev/null 2>&1; then
-				printf 'started'
-			else
-				printf 'stopped'
-			fi
-			;;
-		*)
-			printf 'unknown'
-			;;
-	esac
-}
-
-unit_enabled_state() {
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			systemctl is-enabled "$1" 2>/dev/null || true
-			;;
-		openrc)
-			if [ -e "/etc/runlevels/${OPENRC_RUNLEVEL}/$1" ]; then
-				printf 'enabled'
-			else
-				printf 'disabled'
-			fi
-			;;
-		*)
-			printf 'unknown'
-			;;
-	esac
-}
-
-unit_load_state() {
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			systemctl show -p LoadState --value "$1" 2>/dev/null || true
-			;;
-		openrc)
-			if [ -f "${OPENRC_INIT_DIR}/$1" ]; then
-				printf 'loaded'
-			else
-				printf 'not-found'
-			fi
-			;;
-		*)
-			printf 'unknown'
-			;;
-	esac
-}
-
-service_daemon_reload() {
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			systemctl daemon-reload
-			;;
-		openrc)
-			: # OpenRC does not need a daemon reload for init scripts
-			;;
-	esac
-}
-
-service_enable_now() {
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			systemctl enable --now "$1"
-			;;
-		openrc)
-			rc-update add "$1" "${OPENRC_RUNLEVEL}" >/dev/null 2>&1 || true
-			rc-service "$1" start
-			;;
-	esac
-}
-
-service_restart_unit() {
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			systemctl restart "$1"
-			;;
-		openrc)
-			rc-service "$1" restart
-			;;
-	esac
-}
-
-service_stop_unit() {
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			systemctl stop "$1"
-			;;
-		openrc)
-			rc-service "$1" stop
-			;;
-	esac
-}
-
-service_disable_unit() {
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			systemctl disable "$1"
-			;;
-		openrc)
-			rc-update del "$1" "${OPENRC_RUNLEVEL}" >/dev/null 2>&1 || true
-			;;
-	esac
-}
-
-service_status_detail() {
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			systemctl status --no-pager --full "$1"
-			;;
-		openrc)
-			rc-service "$1" status
-			;;
-	esac
-}
-
-service_logs_unit() {
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			journalctl -u "$1" -n 100 --no-pager
-			;;
-		openrc)
-			local log_file="${RATHOLE_LOG_DIR}/${1}.log"
-			if [ -f "${log_file}" ]; then
-				tail -n 100 "${log_file}"
-			else
-				warn "日志文件不存在: ${log_file}"
-			fi
-			;;
-	esac
-}
-
-ensure_alpine_compat_packages() {
-	detect_system
-	if [ "${INIT_SYSTEM}" = "openrc" ] && [ "${OS_FAMILY}" = "alpine" ] && [ "${RATHOLE_NEEDS_GCOMPAT}" = "1" ]; then
-		info "Alpine x86_64 检测到 glibc 兼容需求，正在安装 gcompat"
-		if ! ensure_packages gcompat; then
-			warn "gcompat 安装失败，尝试 libc6-compat"
-			ensure_packages libc6-compat
-		fi
-	fi
-}
-
-write_openrc_service_script() {
-	local kind="$1"
-	local name="$2"
-	local script_file
-	local config_file
-	local pid_file
-	local log_file
-	local mode_flag=""
-	local description=""
-	local service_name=""
-
-	service_name="$(unit_name "${kind}" "${name}")"
-	script_file="$(service_definition_path "${kind}" "${name}")"
-	config_file="$(config_path "${kind}" "${name}")"
-	pid_file="$(service_pid_path "${kind}" "${name}")"
-	log_file="$(service_log_path "${kind}" "${name}")"
-
-	case "${kind}" in
-		server)
-			mode_flag="-s"
-			description="Rathole Server Service"
-			;;
-		client)
-			mode_flag="-c"
-			description="Rathole Client Service"
-			;;
-		*)
-			die "未知类型: ${kind}"
-			;;
-	esac
-
-	cat > "${script_file}" <<EOF
+    # Server
+    cat > "/etc/init.d/${SERVICE_NAME_SERVER}" <<'RCEOF'
 #!/sbin/openrc-run
-description="${description}"
-command="${INSTALL_BIN}"
-pidfile="${pid_file}"
+name="rathole-server"
+description="rathole Server"
+command="/usr/local/bin/rathole"
+command_args="/etc/rathole/server.toml"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/rathole/server.log"
+error_log="/var/log/rathole/server.log"
 
 depend() {
-	use net
+    need net
+    after firewall
+}
+RCEOF
+    chmod +x "/etc/init.d/${SERVICE_NAME_SERVER}"
+
+    # Client
+    cat > "/etc/init.d/${SERVICE_NAME_CLIENT}" <<'RCEOF'
+#!/sbin/openrc-run
+name="rathole-client"
+description="rathole Client"
+command="/usr/local/bin/rathole"
+command_args="/etc/rathole/client.toml"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/rathole/client.log"
+error_log="/var/log/rathole/client.log"
+
+depend() {
+    need net
+    after firewall
+}
+RCEOF
+    chmod +x "/etc/init.d/${SERVICE_NAME_CLIENT}"
+
+    success "OpenRC 服务已安装"
 }
 
-start_pre() {
-	checkpath -d -m 0755 "${RATHOLE_RUN_DIR}" "${RATHOLE_LOG_DIR}"
-	[ -f "${config_file}" ] || return 1
+# ────────────────────────────────────────────────────────────
+# 服务控制封装
+# ────────────────────────────────────────────────────────────
+svc_action() {
+    local action="$1"   # start | stop | restart | enable | disable | status
+    local svc="$2"      # rathole-server | rathole-client
+
+    case "$INIT_SYSTEM" in
+        systemd)
+            case "$action" in
+                start|stop|restart|status)
+                    systemctl "$action" "$svc"
+                    ;;
+                enable)
+                    systemctl enable "$svc"
+                    systemctl start "$svc"
+                    ;;
+                disable)
+                    systemctl stop "$svc" 2>/dev/null || true
+                    systemctl disable "$svc"
+                    ;;
+            esac
+            ;;
+        openrc)
+            case "$action" in
+                start|stop|restart|status)
+                    rc-service "$svc" "$action"
+                    ;;
+                enable)
+                    rc-update add "$svc" default
+                    rc-service "$svc" start
+                    ;;
+                disable)
+                    rc-service "$svc" stop 2>/dev/null || true
+                    rc-update del "$svc" default
+                    ;;
+            esac
+            ;;
+        none)
+            warn "未检测到 init 系统，无法执行服务操作"
+            ;;
+    esac
 }
 
-start() {
-	ebegin "Starting ${service_name}"
-	start-stop-daemon --start --background --make-pidfile --pidfile "${pid_file}" --exec /bin/sh -- -c "exec ${INSTALL_BIN} ${mode_flag} ${config_file} >>${log_file} 2>&1"
-	eend \$?
+svc_is_active() {
+    local svc="$1"
+    case "$INIT_SYSTEM" in
+        systemd) systemctl is-active --quiet "$svc" 2>/dev/null ;;
+        openrc)  rc-service "$svc" status &>/dev/null ;;
+        none)    return 1 ;;
+    esac
 }
 
-stop() {
-	ebegin "Stopping ${service_name}"
-	start-stop-daemon --stop --pidfile "${pid_file}"
-	eend \$?
-}
-EOF
+# ────────────────────────────────────────────────────────────
+# 配置管理 - 服务端
+# ────────────────────────────────────────────────────────────
+server_config_file="${CONFIG_DIR}/server.toml"
 
-	chmod 755 "${script_file}"
-}
-
-sync_service_definitions() {
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			write_systemd_templates
-			;;
-		openrc)
-			local kind=""
-			local name=""
-			local dir=""
-			local -a names=()
-
-			mkdir -p "${RATHOLE_RUN_DIR}" "${RATHOLE_LOG_DIR}"
-			for kind in server client; do
-				dir="$(kind_dir "${kind}")"
-				mapfile -t names < <(collect_kind_names "${dir}")
-				for name in "${names[@]}"; do
-					write_openrc_service_script "${kind}" "${name}"
-				done
-			done
-			;;
-	esac
+list_server_services() {
+    if [[ ! -f "$server_config_file" ]]; then
+        info "服务端配置文件不存在"
+        return
+    fi
+    echo ""
+    echo -e "${BOLD}当前服务端隧道列表:${NC}"
+    # 提取 [server.services.<name>] 节名
+    grep -oP '(?<=\[server\.services\.)[^\]]+' "$server_config_file" 2>/dev/null \
+        | nl -ba -nrz -w3 | sed 's/^/  /' || info "  (无隧道配置)"
+    echo ""
 }
 
-ensure_service_definition() {
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			write_systemd_templates
-			;;
-		openrc)
-			write_openrc_service_script "$1" "$2"
-			;;
-	esac
-}
+add_server_service() {
+    mkdir -p "$CONFIG_DIR"
+
+    # 若无配置文件，生成基础模板
+    if [[ ! -f "$server_config_file" ]]; then
+        local bind_port default_token
+        echo -e "${CYAN}首次配置服务端${NC}"
+        read -rp "  服务端监听端口 (默认 2333): " bind_port
+        bind_port="${bind_port:-2333}"
+
+        # 验证端口号是合法整数
+        if ! [[ "$bind_port" =~ ^[0-9]+$ ]] || (( bind_port < 1 || bind_port > 65535 )); then
+            err "端口号无效: $bind_port"
+            return 1
+        fi
+
+        # 生成随机 token（使用系统随机源）
+        default_token="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32 2>/dev/null || echo "change_me_$(date +%s)")"
+
+        cat > "$server_config_file" <<EOF
+# rathole 服务端配置
+# 由管理脚本自动生成
 
-remove_service_definition() {
-	detect_system
-	case "${INIT_SYSTEM}" in
-		systemd)
-			: # systemd 仅使用全局模板，删除单个配置不需要移除模板
-			;;
-		openrc)
-			rm -f "$(service_definition_path "$1" "$2")"
-			;;
-	esac
-}
-
-ensure_packages() {
-	local -a packages=("$@")
-
-	if ((${#packages[@]} == 0)); then
-		return 0
-	fi
-
-	if has_cmd apt-get; then
-		export DEBIAN_FRONTEND=noninteractive
-		apt-get update
-		apt-get install -y "${packages[@]}"
-	elif has_cmd dnf; then
-		dnf install -y "${packages[@]}"
-	elif has_cmd yum; then
-		yum install -y "${packages[@]}"
-	elif has_cmd apk; then
-		apk add --no-cache "${packages[@]}"
-	else
-		die "缺少 curl 或 unzip，且未找到可用的包管理器，请手动安装后重试"
-	fi
-}
-
-ensure_download_tools() {
-	local -a missing=()
-	has_cmd curl || missing+=(curl)
-	has_cmd unzip || missing+=(unzip)
-	if ((${#missing[@]} > 0)); then
-		info "检测到缺少基础工具，正在安装: ${missing[*]}"
-		ensure_packages "${missing[@]}"
-	fi
-}
-
-detect_arch_asset() {
-	local machine
-	detect_system
-	RATHOLE_NEEDS_GCOMPAT=0
-	machine="$(uname -m)"
-
-	case "${machine}" in
-		x86_64|amd64)
-			ARCH_ASSET="rathole-x86_64-unknown-linux-gnu.zip"
-			;;
-		aarch64|arm64)
-			ARCH_ASSET="rathole-aarch64-unknown-linux-musl.zip"
-			;;
-		armv7l|armv7|armhf)
-			ARCH_ASSET="rathole-armv7-unknown-linux-musleabihf.zip"
-			;;
-		armv6l|armv6|arm*)
-			warn "检测到 ARM 架构 ${machine}，将尝试使用通用 hard-float 包"
-			ARCH_ASSET="rathole-arm-unknown-linux-musleabihf.zip"
-			;;
-		*)
-			die "暂不支持当前架构: ${machine}"
-			;;
-	esac
-
-	if [ "${INIT_SYSTEM}" = "openrc" ] && [ "${OS_FAMILY}" = "alpine" ]; then
-		case "${machine}" in
-			x86_64|amd64)
-				RATHOLE_NEEDS_GCOMPAT=1
-				;;
-		esac
-	fi
-
-	info "检测到系统架构: ${machine}"
-	info "对应安装包: ${ARCH_ASSET}"
-}
-
-fetch_release_json() {
-	local json=""
-
-	if [ -n "${CDN_PREFIX}" ]; then
-		json="$(curl -fsSL --retry 3 --connect-timeout 10 "$(apply_cdn_prefix "${GITHUB_API_LATEST}")" 2>/dev/null || true)"
-		if printf '%s' "${json}" | grep -q '"tag_name"'; then
-			printf '%s' "${json}"
-			return 0
-		fi
-		warn "CDN 获取 release 信息失败，回退直连 GitHub API"
-	fi
-
-	curl -fsSL --retry 3 --connect-timeout 10 "${GITHUB_API_LATEST}"
-}
-
-fetch_latest_version() {
-	if [ -n "${RATHOLE_VERSION:-}" ] && [ "${RATHOLE_VERSION}" != "latest" ]; then
-		case "${RATHOLE_VERSION}" in
-			v*)
-				LATEST_VERSION="${RATHOLE_VERSION}"
-				;;
-			*)
-				LATEST_VERSION="v${RATHOLE_VERSION}"
-				;;
-		esac
-		info "使用指定版本: ${LATEST_VERSION}"
-		return 0
-	fi
-
-	local json=""
-	local version=""
-
-	json="$(fetch_release_json)"
-	version="$(printf '%s' "${json}" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-
-	[ -n "${version}" ] || die "无法获取 rathole 最新版本号"
-
-	LATEST_VERSION="${version}"
-	info "获取到最新版本: ${LATEST_VERSION}"
-}
-
-download_archive() {
-	local url="$1"
-	local dest="$2"
-	local prefixed_url=""
-
-	if [ -n "${CDN_PREFIX}" ]; then
-		prefixed_url="$(apply_cdn_prefix "${url}")"
-		if curl -fL --retry 3 --connect-timeout 10 -o "${dest}" "${prefixed_url}"; then
-			if unzip -tq "${dest}" >/dev/null 2>&1; then
-				return 0
-			fi
-			warn "CDN 返回的内容不是有效压缩包，回退直连下载"
-		else
-			warn "CDN 下载失败，回退直连下载"
-		fi
-		rm -f "${dest}"
-	fi
-
-	curl -fL --retry 3 --connect-timeout 10 -o "${dest}" "${url}"
-	unzip -tq "${dest}" >/dev/null 2>&1 || die "下载包损坏: ${url}"
-}
-
-write_systemd_templates() {
-	cat > "${SERVER_UNIT_TEMPLATE}" <<EOF
-[Unit]
-Description=Rathole Server Service
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-Restart=on-failure
-RestartSec=5s
-LimitNOFILE=1048576
-ExecStart=${INSTALL_BIN} -s ${SERVER_DIR}/%i.toml
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-	cat > "${CLIENT_UNIT_TEMPLATE}" <<EOF
-[Unit]
-Description=Rathole Client Service
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-Restart=on-failure
-RestartSec=5s
-LimitNOFILE=1048576
-ExecStart=${INSTALL_BIN} -c ${CLIENT_DIR}/%i.toml
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-	chmod 644 "${SERVER_UNIT_TEMPLATE}" "${CLIENT_UNIT_TEMPLATE}"
-}
-
-prepare_install_dirs() {
-	mkdir -p "${CONFIG_ROOT}" "${SERVER_DIR}" "${CLIENT_DIR}"
-	chmod 755 "${CONFIG_ROOT}" "${SERVER_DIR}" "${CLIENT_DIR}" 2>/dev/null || true
-}
-
-install_rathole() {
-	require_root
-	require_service_system
-	ensure_download_tools
-	detect_system
-	detect_arch_asset
-	ensure_alpine_compat_packages
-	fetch_latest_version
-	prepare_install_dirs
-	sync_service_definitions
-
-	TMP_DIR="$(mktemp -d)"
-	local archive="${TMP_DIR}/${ARCH_ASSET}"
-	local extract_dir="${TMP_DIR}/extract"
-	local download_url="${GITHUB_RELEASE_BASE}/${LATEST_VERSION}/${ARCH_ASSET}"
-
-	mkdir -p "${extract_dir}"
-
-	info "开始下载 rathole ${LATEST_VERSION}"
-	download_archive "${download_url}" "${archive}"
-
-	unzip -oq "${archive}" -d "${extract_dir}"
-
-	local binary_path=""
-	binary_path="$(find "${extract_dir}" -type f -name rathole | head -n 1)"
-	[ -n "${binary_path}" ] || die "压缩包中未找到 rathole 可执行文件"
-
-	install -m 755 "${binary_path}" "${INSTALL_BIN}"
-	sync_service_definitions
-	service_daemon_reload
-
-	success "rathole ${LATEST_VERSION} 安装完成"
-	info "二进制路径: ${INSTALL_BIN}"
-	if [ "${INIT_SYSTEM}" = "systemd" ]; then
-		info "服务模板: ${SERVER_UNIT_TEMPLATE} 和 ${CLIENT_UNIT_TEMPLATE}"
-	else
-		info "OpenRC 服务脚本将按配置自动生成于 ${OPENRC_INIT_DIR}"
-	fi
-	info "配置目录: ${SERVER_DIR} 和 ${CLIENT_DIR}"
-}
-
-ensure_service_stack() {
-	if service_stack_ready; then
-		return 0
-	fi
-	install_rathole
-}
-
-require_service_stack() {
-	service_stack_ready || die "rathole 尚未安装，请先执行 install"
-}
-
-collect_kind_names() {
-	local dir="$1"
-	local file=""
-	local name=""
-
-	for file in "${dir}"/*.toml; do
-		[ -e "${file}" ] || continue
-		name="$(basename "${file}" .toml)"
-		printf '%s\n' "${name}"
-	done
-}
-
-config_exists() {
-	[ -f "$(config_path "$1" "$2")" ]
-}
-
-choose_kind_name() {
-	local kind="$1"
-	local dir
-	local -a names=()
-	local index=1
-	local choice=""
-
-	dir="$(kind_dir "${kind}")"
-	mapfile -t names < <(collect_kind_names "${dir}")
-
-	if ((${#names[@]} == 0)); then
-		die "${kind_label "${kind}"} 暂无配置"
-	fi
-
-	if ((${#names[@]} == 1)); then
-		printf '%s\n' "${names[0]}"
-		return 0
-	fi
-
-	info "请选择 ${kind_label "${kind}"} 配置"
-	for name in "${names[@]}"; do
-		printf '  %d) %s\n' "${index}" "${name}"
-		index=$((index + 1))
-	done
-
-	while true; do
-		read -r -p "请输入序号: " choice || true
-		if [[ "${choice}" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#names[@]} )); then
-			printf '%s\n' "${names[$((choice - 1))]}"
-			return 0
-		fi
-		warn "无效选择"
-	done
-}
-
-list_kind_summary() {
-	local kind="$1"
-	local dir
-	local -a names=()
-	local name=""
-	local unit=""
-	local file=""
-	local active=""
-	local enabled=""
-
-	dir="$(kind_dir "${kind}")"
-	mapfile -t names < <(collect_kind_names "${dir}")
-
-	if ((${#names[@]} == 0)); then
-		info "${kind_label "${kind}"} 暂无配置"
-		return 0
-	fi
-
-	printf '%-8s %-24s %-12s %-12s %s\n' "TYPE" "NAME" "ACTIVE" "ENABLED" "CONFIG"
-
-	for name in "${names[@]}"; do
-		unit="$(unit_name "${kind}" "${name}")"
-		file="$(config_path "${kind}" "${name}")"
-
-		active="$(unit_active_state "${unit}")"
-		enabled="$(unit_enabled_state "${unit}")"
-
-		printf '%-8s %-24s %-12s %-12s %s\n' "${kind}" "${name}" "${active:-unknown}" "${enabled:-unknown}" "${file}"
-	done
-}
-
-show_binary_status() {
-	if [ -x "${INSTALL_BIN}" ]; then
-		local version_text=""
-		version_text="$("${INSTALL_BIN}" --version 2>/dev/null || true)"
-		if [ -n "${version_text}" ]; then
-			info "当前版本: ${version_text}"
-		else
-			info "rathole 已安装: ${INSTALL_BIN}"
-		fi
-	else
-		warn "rathole 尚未安装"
-	fi
-}
-
-show_global_status() {
-	local target="${1:-}"
-
-	show_binary_status
-	printf '\n'
-
-	if [ -z "${target}" ] || [ "${target}" = "all" ]; then
-		list_kind_summary server
-		printf '\n'
-		list_kind_summary client
-		return 0
-	fi
-
-	show_target_status "${target}"
-}
-
-show_target_status() {
-	local target="$1"
-	local -a matches=()
-	local kind=""
-	local unit=""
-	local file=""
-	local active=""
-	local enabled=""
-
-	if [ -f "$(config_path server "${target}")" ]; then
-		matches+=("server")
-	fi
-	if [ -f "$(config_path client "${target}")" ]; then
-		matches+=("client")
-	fi
-
-	if ((${#matches[@]} == 0)); then
-		die "未找到配置: ${target}"
-	fi
-
-	for kind in "${matches[@]}"; do
-		unit="$(unit_name "${kind}" "${target}")"
-		file="$(config_path "${kind}" "${target}")"
-		active="$(unit_active_state "${unit}")"
-		enabled="$(unit_enabled_state "${unit}")"
-		printf '%-8s %-24s %-12s %-12s %s\n' "${kind}" "${target}" "${active:-unknown}" "${enabled:-unknown}" "${file}"
-		if [ "$(unit_load_state "${unit}")" = "loaded" ]; then
-			service_status_detail "${unit}"
-		else
-			warn "系统中未加载单元: ${unit}"
-		fi
-		printf '\n'
-	done
-}
-
-collect_matching_units() {
-	local target="${1:-}"
-	local -a units=()
-	local kind=""
-	local name=""
-	local dir=""
-	local file=""
-
-	if [ -z "${target}" ] || [ "${target}" = "all" ]; then
-		for kind in server client; do
-			dir="$(kind_dir "${kind}")"
-			for file in "${dir}"/*.toml; do
-				[ -e "${file}" ] || continue
-				name="$(basename "${file}" .toml)"
-				units+=("$(unit_name "${kind}" "${name}")")
-			done
-		done
-	else
-		if [ -f "$(config_path server "${target}")" ]; then
-			units+=("$(unit_name server "${target}")")
-		fi
-		if [ -f "$(config_path client "${target}")" ]; then
-			units+=("$(unit_name client "${target}")")
-		fi
-	fi
-
-	if ((${#units[@]} == 0)); then
-		return 1
-	fi
-
-	printf '%s\n' "${units[@]}"
-}
-
-restart_units() {
-	local target="${1:-}"
-	local -a units=()
-	local unit=""
-
-	require_service_stack
-
-	mapfile -t units < <(collect_matching_units "${target}" ) || true
-	if ((${#units[@]} == 0)); then
-		die "未找到可重启的配置"
-	fi
-
-	for unit in "${units[@]}"; do
-		service_restart_unit "${unit}"
-		success "已重启: ${unit}"
-	done
-}
-
-show_logs() {
-	local target="${1:-}"
-	local -a units=()
-	local unit=""
-
-	require_service_stack
-
-	mapfile -t units < <(collect_matching_units "${target}") || true
-	if ((${#units[@]} == 0)); then
-		die "未找到可查看日志的配置"
-	fi
-
-	for unit in "${units[@]}"; do
-		service_logs_unit "${unit}"
-		printf '\n'
-	done
-}
-
-write_server_config() {
-	local name="$1"
-	local service_name="$2"
-	local listen_port="$3"
-	local expose_port="$4"
-	local token="$5"
-	local file
-
-	file="$(config_path server "${name}")"
-
-	cat > "${file}" <<EOF
-# 由 rathole 管理脚本生成
 [server]
-bind_addr = "0.0.0.0:${listen_port}"
-default_token = "$(toml_escape "${token}")"
+bind_addr = "0.0.0.0:${bind_port}"
+default_token = "${default_token}"
 
-[server.services.${service_name}]
-bind_addr = "0.0.0.0:${expose_port}"
 EOF
+        chmod 640 "$server_config_file"
+        success "创建配置文件: $server_config_file"
+        info "默认 Token: ${default_token}"
+    fi
 
-	chmod 600 "${file}"
+    echo -e "${CYAN}添加服务端隧道${NC}"
+    local svc_name remote_addr token
+
+    read -rp "  隧道名称 (字母/数字/下划线): " svc_name
+    # 安全校验名称，只允许字母、数字、下划线、连字符
+    if ! [[ "$svc_name" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        err "名称只能包含字母、数字、下划线和连字符"
+        return 1
+    fi
+
+    # 检查是否已存在
+    if grep -q "\[server\.services\.${svc_name}\]" "$server_config_file" 2>/dev/null; then
+        err "隧道 '${svc_name}' 已存在，请先删除后再添加"
+        return 1
+    fi
+
+    read -rp "  绑定地址 (例 0.0.0.0:8080): " remote_addr
+    # 简单校验格式 IP:PORT 或 *:PORT
+    if ! [[ "$remote_addr" =~ ^[0-9a-zA-Z.*:]+:[0-9]+$ ]]; then
+        err "地址格式无效，应为 IP:PORT 格式"
+        return 1
+    fi
+
+    read -rp "  独立 Token (留空使用默认 Token): " token
+
+    # 追加配置
+    {
+        echo ""
+        echo "[server.services.${svc_name}]"
+        echo "bind_addr = \"${remote_addr}\""
+        if [[ -n "$token" ]]; then
+            echo "token = \"${token}\""
+        fi
+    } >> "$server_config_file"
+
+    success "隧道 '${svc_name}' 已添加"
 }
 
-write_client_config() {
-	local name="$1"
-	local service_name="$2"
-	local remote_addr="$3"
-	local local_addr="$4"
-	local token="$5"
-	local file
+edit_server_service() {
+    list_server_services
+    read -rp "  输入要编辑的隧道名称: " svc_name
+    if ! [[ "$svc_name" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        err "名称格式无效"
+        return 1
+    fi
+    if ! grep -q "\[server\.services\.${svc_name}\]" "$server_config_file" 2>/dev/null; then
+        err "隧道 '${svc_name}' 不存在"
+        return 1
+    fi
+    "${EDITOR:-vi}" "$server_config_file"
+    success "配置已保存，建议重启服务以生效"
+}
 
-	file="$(config_path client "${name}")"
+delete_server_service() {
+    list_server_services
+    read -rp "  输入要删除的隧道名称: " svc_name
+    if ! [[ "$svc_name" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        err "名称格式无效"
+        return 1
+    fi
+    if ! grep -q "\[server\.services\.${svc_name}\]" "$server_config_file" 2>/dev/null; then
+        err "隧道 '${svc_name}' 不存在"
+        return 1
+    fi
 
-	cat > "${file}" <<EOF
-# 由 rathole 管理脚本生成
+    # 删除该 [server.services.NAME] 节及其后续属性行（直到下一个 [ 节或文件结尾）
+    local tmp_file
+    tmp_file="$(mktemp)"
+    awk -v name="${svc_name}" '
+        BEGIN { skip=0 }
+        /^\[server\.services\./ {
+            if ($0 ~ "\\[server\\.services\\." name "\\]") {
+                skip=1; next
+            } else {
+                skip=0
+            }
+        }
+        /^\[/ && !/^\[server\.services\./ { skip=0 }
+        !skip { print }
+    ' "$server_config_file" > "$tmp_file"
+    mv "$tmp_file" "$server_config_file"
+    success "隧道 '${svc_name}' 已删除"
+}
+
+# ────────────────────────────────────────────────────────────
+# 配置管理 - 客户端
+# ────────────────────────────────────────────────────────────
+client_config_file="${CONFIG_DIR}/client.toml"
+
+list_client_services() {
+    if [[ ! -f "$client_config_file" ]]; then
+        info "客户端配置文件不存在"
+        return
+    fi
+    echo ""
+    echo -e "${BOLD}当前客户端隧道列表:${NC}"
+    grep -oP '(?<=\[client\.services\.)[^\]]+' "$client_config_file" 2>/dev/null \
+        | nl -ba -nrz -w3 | sed 's/^/  /' || info "  (无隧道配置)"
+    echo ""
+}
+
+add_client_service() {
+    mkdir -p "$CONFIG_DIR"
+
+    if [[ ! -f "$client_config_file" ]]; then
+        local server_addr default_token
+        echo -e "${CYAN}首次配置客户端${NC}"
+        read -rp "  服务端地址 (例 1.2.3.4:2333): " server_addr
+        if ! [[ "$server_addr" =~ ^[0-9a-zA-Z._-]+:[0-9]+$ ]]; then
+            err "地址格式无效"
+            return 1
+        fi
+
+        read -rp "  默认 Token: " default_token
+        if [[ -z "$default_token" ]]; then
+            err "Token 不能为空"
+            return 1
+        fi
+
+        cat > "$client_config_file" <<EOF
+# rathole 客户端配置
+# 由管理脚本自动生成
+
 [client]
-remote_addr = "$(toml_escape "${remote_addr}")"
-default_token = "$(toml_escape "${token}")"
+remote_addr = "${server_addr}"
+default_token = "${default_token}"
 
-[client.services.${service_name}]
-local_addr = "$(toml_escape "${local_addr}")"
 EOF
+        chmod 640 "$client_config_file"
+        success "创建配置文件: $client_config_file"
+    fi
 
-	chmod 600 "${file}"
+    echo -e "${CYAN}添加客户端隧道${NC}"
+    local svc_name local_addr token
+
+    read -rp "  隧道名称 (需与服务端一致): " svc_name
+    if ! [[ "$svc_name" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        err "名称只能包含字母、数字、下划线和连字符"
+        return 1
+    fi
+
+    if grep -q "\[client\.services\.${svc_name}\]" "$client_config_file" 2>/dev/null; then
+        err "隧道 '${svc_name}' 已存在"
+        return 1
+    fi
+
+    read -rp "  本地转发地址 (例 127.0.0.1:80): " local_addr
+    if ! [[ "$local_addr" =~ ^[0-9a-zA-Z._*:-]+:[0-9]+$ ]]; then
+        err "地址格式无效"
+        return 1
+    fi
+
+    read -rp "  独立 Token (留空使用默认 Token): " token
+
+    {
+        echo ""
+        echo "[client.services.${svc_name}]"
+        echo "local_addr = \"${local_addr}\""
+        if [[ -n "$token" ]]; then
+            echo "token = \"${token}\""
+        fi
+    } >> "$client_config_file"
+
+    success "隧道 '${svc_name}' 已添加"
 }
 
-create_config() {
-	local kind="$1"
-	local default_name="$2"
-	local name=""
-	local service_name=""
-	local token=""
-	local file=""
-
-	ensure_service_stack
-
-	prompt_name "配置文件名" "${default_name}" name
-	file="$(config_path "${kind}" "${name}")"
-
-	[ ! -e "${file}" ] || die "配置已存在: ${file}，请先编辑或删除后重试"
-
-	prompt_name "服务名" "${name}" service_name
-	token="$(generate_token)"
-	prompt_value "token" "${token}" token
-
-	case "${kind}" in
-		server)
-			local listen_port=""
-			local expose_port=""
-			prompt_port "rathole 监听端口" "2333" listen_port
-			prompt_port "对外暴露端口" "5202" expose_port
-			write_server_config "${name}" "${service_name}" "${listen_port}" "${expose_port}" "${token}"
-			;;
-		client)
-			local remote_addr=""
-			local local_addr=""
-			prompt_value "远端服务器地址" "" remote_addr
-			prompt_value "本地转发地址" "127.0.0.1:22" local_addr
-			write_client_config "${name}" "${service_name}" "${remote_addr}" "${local_addr}" "${token}"
-			;;
-		*)
-			die "未知类型: ${kind}"
-			;;
-	esac
-
-	ensure_service_definition "${kind}" "${name}"
-	service_daemon_reload
-	service_enable_now "$(unit_name "${kind}" "${name}")"
-	success "已创建并启动 ${kind_label "${kind}"}配置: ${name}"
-	info "配置文件: ${file}"
+edit_client_service() {
+    list_client_services
+    read -rp "  输入要编辑的隧道名称: " svc_name
+    if ! [[ "$svc_name" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        err "名称格式无效"
+        return 1
+    fi
+    if ! grep -q "\[client\.services\.${svc_name}\]" "$client_config_file" 2>/dev/null; then
+        err "隧道 '${svc_name}' 不存在"
+        return 1
+    fi
+    "${EDITOR:-vi}" "$client_config_file"
+    success "配置已保存，建议重启服务以生效"
 }
 
-edit_config() {
-	local kind="$1"
-	local requested_name="${2:-}"
-	local name=""
-	local file=""
-	local unit=""
-	local editor=""
+delete_client_service() {
+    list_client_services
+    read -rp "  输入要删除的隧道名称: " svc_name
+    if ! [[ "$svc_name" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        err "名称格式无效"
+        return 1
+    fi
+    if ! grep -q "\[client\.services\.${svc_name}\]" "$client_config_file" 2>/dev/null; then
+        err "隧道 '${svc_name}' 不存在"
+        return 1
+    fi
 
-	if [ -z "${requested_name}" ] || [ "${requested_name}" = "all" ]; then
-		name="$(choose_kind_name "${kind}")"
-	else
-		name="${requested_name}"
-	fi
-
-	file="$(config_path "${kind}" "${name}")"
-	[ -f "${file}" ] || die "配置不存在: ${file}"
-
-	editor="${VISUAL:-${EDITOR:-vi}}"
-	if has_cmd "${editor}"; then
-		"${editor}" "${file}"
-	elif has_cmd vi; then
-		vi "${file}"
-	else
-		die "未找到可用编辑器，请先设置 EDITOR 或安装 vi"
-	fi
-
-	if service_stack_ready; then
-		unit="$(unit_name "${kind}" "${name}")"
-		service_daemon_reload
-		service_restart_unit "${unit}"
-		success "已保存并重启: ${unit}"
-	else
-		warn "rathole 服务尚未安装，已保存配置但未重启"
-	fi
+    local tmp_file
+    tmp_file="$(mktemp)"
+    awk -v name="${svc_name}" '
+        BEGIN { skip=0 }
+        /^\[client\.services\./ {
+            if ($0 ~ "\\[client\\.services\\." name "\\]") {
+                skip=1; next
+            } else {
+                skip=0
+            }
+        }
+        /^\[/ && !/^\[client\.services\./ { skip=0 }
+        !skip { print }
+    ' "$client_config_file" > "$tmp_file"
+    mv "$tmp_file" "$client_config_file"
+    success "隧道 '${svc_name}' 已删除"
 }
 
-delete_config() {
-	local kind="$1"
-	local requested_name="${2:-}"
-	local name=""
-	local file=""
-	local unit=""
-	local dir=""
+# ────────────────────────────────────────────────────────────
+# 状态显示
+# ────────────────────────────────────────────────────────────
+show_status() {
+    detect_init
+    title "运行状态"
 
-	if [ -z "${requested_name}" ] || [ "${requested_name}" = "all" ]; then
-		name="$(choose_kind_name "${kind}")"
-	else
-		name="${requested_name}"
-	fi
+    local version="N/A"
+    if command -v "$BINARY" &>/dev/null; then
+        version="$("${INSTALL_DIR}/${BINARY}" --version 2>/dev/null | head -n1 || echo "N/A")"
+    fi
+    echo -e "  ${BOLD}版本:${NC} ${version}"
+    echo ""
 
-	file="$(config_path "${kind}" "${name}")"
-	[ -f "${file}" ] || die "配置不存在: ${file}"
+    for svc in "$SERVICE_NAME_SERVER" "$SERVICE_NAME_CLIENT"; do
+        local label="服务端"
+        [[ "$svc" == "$SERVICE_NAME_CLIENT" ]] && label="客户端"
 
-	if ! confirm "确认删除 ${kind_label "${kind}"}配置 ${name} 吗"; then
-		info "已取消"
-		return 0
-	fi
-
-	unit="$(unit_name "${kind}" "${name}")"
-	service_stop_unit "${unit}" >/dev/null 2>&1 || true
-	service_disable_unit "${unit}" >/dev/null 2>&1 || true
-	service_daemon_reload
-	remove_service_definition "${kind}" "${name}"
-
-	rm -f "${file}"
-	dir="$(kind_dir "${kind}")"
-	rmdir "${dir}" 2>/dev/null || true
-	rmdir "${CONFIG_ROOT}" 2>/dev/null || true
-
-	success "已删除配置: ${file}"
+        echo -ne "  ${BOLD}${label}${NC} (${svc}): "
+        if svc_is_active "$svc"; then
+            echo -e "${GREEN}● 运行中${NC}"
+        else
+            echo -e "${RED}○ 已停止${NC}"
+        fi
+    done
+    echo ""
 }
 
-list_configs() {
-	local kind="$1"
-	list_kind_summary "${kind}"
+# ────────────────────────────────────────────────────────────
+# 日志查看
+# ────────────────────────────────────────────────────────────
+show_logs() {
+    local role="${1:-}"
+    local lines="${2:-50}"
+
+    local log_file
+    if [[ "$role" == "server" ]]; then
+        log_file="${LOG_DIR}/server.log"
+    elif [[ "$role" == "client" ]]; then
+        log_file="${LOG_DIR}/client.log"
+    else
+        echo "1) 服务端日志"
+        echo "2) 客户端日志"
+        read -rp "  选择 [1/2]: " choice
+        case "$choice" in
+            1) log_file="${LOG_DIR}/server.log" ;;
+            2) log_file="${LOG_DIR}/client.log" ;;
+            *) err "无效选择"; return 1 ;;
+        esac
+    fi
+
+    if [[ ! -f "$log_file" ]]; then
+        warn "日志文件不存在: $log_file"
+        return
+    fi
+
+    echo -e "${DIM}── 显示最近 ${lines} 行 (${log_file}) ──${NC}"
+    tail -n "$lines" "$log_file"
+    echo ""
+    read -rp "  按 f 实时跟踪日志，其他键返回: " follow_choice
+    if [[ "$follow_choice" == "f" || "$follow_choice" == "F" ]]; then
+        echo -e "${DIM}(Ctrl+C 退出跟踪)${NC}"
+        tail -f "$log_file"
+    fi
 }
 
-status_kind() {
-	local kind="$1"
-	local target="${2:-}"
+# ────────────────────────────────────────────────────────────
+# 重启
+# ────────────────────────────────────────────────────────────
+do_restart() {
+    require_root
+    detect_init
+    title "重启服务"
 
-	if [ -z "${target}" ] || [ "${target}" = "all" ]; then
-		list_kind_summary "${kind}"
-		return 0
-	fi
+    echo "1) 重启服务端"
+    echo "2) 重启客户端"
+    echo "3) 重启全部"
+    read -rp "  选择 [1-3]: " choice
 
-	if [ ! -f "$(config_path "${kind}" "${target}")" ]; then
-		die "配置不存在: ${target}"
-	fi
-
-	show_target_status "${target}"
+    case "$choice" in
+        1)
+            step "重启服务端..."
+            svc_action restart "$SERVICE_NAME_SERVER"
+            success "服务端已重启"
+            ;;
+        2)
+            step "重启客户端..."
+            svc_action restart "$SERVICE_NAME_CLIENT"
+            success "客户端已重启"
+            ;;
+        3)
+            step "重启服务端..."
+            svc_action restart "$SERVICE_NAME_SERVER"
+            step "重启客户端..."
+            svc_action restart "$SERVICE_NAME_CLIENT"
+            success "全部已重启"
+            ;;
+        *)
+            err "无效选择"
+            ;;
+    esac
 }
 
-restart_kind() {
-	local kind="$1"
-	local target="${2:-}"
-	local -a units=()
-	local unit=""
-	local names_dir=""
-	local name=""
-	local -a names=()
+# ────────────────────────────────────────────────────────────
+# 启用/禁用服务
+# ────────────────────────────────────────────────────────────
+manage_service_enable() {
+    require_root
+    detect_init
+    title "服务管理"
 
-	require_service_stack
+    echo "1) 启动并开机自启 - 服务端"
+    echo "2) 启动并开机自启 - 客户端"
+    echo "3) 停止并取消自启 - 服务端"
+    echo "4) 停止并取消自启 - 客户端"
+    echo "5) 仅启动服务端"
+    echo "6) 仅启动客户端"
+    echo "7) 仅停止服务端"
+    echo "8) 仅停止客户端"
+    read -rp "  选择 [1-8]: " choice
 
-	if [ -z "${target}" ] || [ "${target}" = "all" ]; then
-		names_dir="$(kind_dir "${kind}")"
-		mapfile -t names < <(collect_kind_names "${names_dir}")
-		if ((${#names[@]} == 0)); then
-			die "${kind_label "${kind}"} 暂无可重启的配置"
-		fi
-		for name in "${names[@]}"; do
-			units+=("$(unit_name "${kind}" "${name}")")
-		done
-	else
-		[ -f "$(config_path "${kind}" "${target}")" ] || die "配置不存在: ${target}"
-		units+=("$(unit_name "${kind}" "${target}")")
-	fi
-
-	for unit in "${units[@]}"; do
-		service_restart_unit "${unit}"
-		success "已重启: ${unit}"
-	done
+    case "$choice" in
+        1) svc_action enable "$SERVICE_NAME_SERVER"; success "服务端已启用" ;;
+        2) svc_action enable "$SERVICE_NAME_CLIENT"; success "客户端已启用" ;;
+        3) svc_action disable "$SERVICE_NAME_SERVER"; success "服务端已禁用" ;;
+        4) svc_action disable "$SERVICE_NAME_CLIENT"; success "客户端已禁用" ;;
+        5) svc_action start "$SERVICE_NAME_SERVER"; success "服务端已启动" ;;
+        6) svc_action start "$SERVICE_NAME_CLIENT"; success "客户端已启动" ;;
+        7) svc_action stop "$SERVICE_NAME_SERVER"; success "服务端已停止" ;;
+        8) svc_action stop "$SERVICE_NAME_CLIENT"; success "客户端已停止" ;;
+        *) err "无效选择" ;;
+    esac
 }
 
-logs_kind() {
-	local kind="$1"
-	local target="${2:-}"
-	local -a units=()
-	local names_dir=""
-	local -a names=()
-	local name=""
-	local unit=""
+# ────────────────────────────────────────────────────────────
+# 卸载
+# ────────────────────────────────────────────────────────────
+do_uninstall() {
+    require_root
+    detect_init
+    title "卸载 rathole"
 
-	require_service_stack
+    warn "此操作将删除 rathole 二进制、服务和日志"
+    read -rp "  确认卸载？[y/N]: " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        info "已取消"
+        return
+    fi
 
-	if [ -z "${target}" ] || [ "${target}" = "all" ]; then
-		names_dir="$(kind_dir "${kind}")"
-		mapfile -t names < <(collect_kind_names "${names_dir}")
-		if ((${#names[@]} == 0)); then
-			die "${kind_label "${kind}"} 暂无可查看日志的配置"
-		fi
-		for name in "${names[@]}"; do
-			units+=("$(unit_name "${kind}" "${name}")")
-		done
-	else
-		[ -f "$(config_path "${kind}" "${target}")" ] || die "配置不存在: ${target}"
-		units+=("$(unit_name "${kind}" "${target}")")
-	fi
+    read -rp "  是否同时删除配置文件？[y/N]: " del_config
 
-	for unit in "${units[@]}"; do
-		service_logs_unit "${unit}"
-		printf '\n'
-	done
+    # 停止并卸载服务
+    for svc in "$SERVICE_NAME_SERVER" "$SERVICE_NAME_CLIENT"; do
+        step "停止服务: $svc"
+        case "$INIT_SYSTEM" in
+            systemd)
+                systemctl stop "$svc" 2>/dev/null || true
+                systemctl disable "$svc" 2>/dev/null || true
+                rm -f "/etc/systemd/system/${svc}.service"
+                ;;
+            openrc)
+                rc-service "$svc" stop 2>/dev/null || true
+                rc-update del "$svc" default 2>/dev/null || true
+                rm -f "/etc/init.d/${svc}"
+                ;;
+        esac
+    done
+
+    [[ "$INIT_SYSTEM" == "systemd" ]] && systemctl daemon-reload
+
+    # 删除二进制
+    rm -f "${INSTALL_DIR}/${BINARY}"
+    success "已删除二进制文件"
+
+    # 删除日志
+    rm -rf "$LOG_DIR"
+    success "已删除日志目录"
+
+    # 可选删除配置
+    if [[ "$del_config" == "y" || "$del_config" == "Y" ]]; then
+        rm -rf "$CONFIG_DIR"
+        success "已删除配置目录"
+    else
+        info "配置文件保留在: ${CONFIG_DIR}"
+    fi
+
+    success "rathole 已成功卸载"
 }
 
-global_restart() {
-	local target="${1:-}"
-	local -a units=()
-	local unit=""
-
-	require_service_stack
-
-	if ! mapfile -t units < <(collect_matching_units "${target}"); then
-		die "未找到可重启的配置"
-	fi
-
-	if ((${#units[@]} == 0)); then
-		die "未找到可重启的配置"
-	fi
-
-	for unit in "${units[@]}"; do
-		service_restart_unit "${unit}"
-		success "已重启: ${unit}"
-	done
+# ────────────────────────────────────────────────────────────
+# 配置管理菜单
+# ────────────────────────────────────────────────────────────
+menu_server_config() {
+    require_root
+    while true; do
+        title "服务端配置管理"
+        list_server_services
+        echo "1) 添加隧道"
+        echo "2) 编辑隧道"
+        echo "3) 删除隧道"
+        echo "4) 直接编辑配置文件"
+        echo "5) 查看配置文件"
+        echo "0) 返回主菜单"
+        echo ""
+        read -rp "  请选择 [0-5]: " choice
+        case "$choice" in
+            1) add_server_service ;;
+            2) edit_server_service ;;
+            3) delete_server_service ;;
+            4) "${EDITOR:-vi}" "$server_config_file" ;;
+            5)
+                if [[ -f "$server_config_file" ]]; then
+                    echo ""
+                    cat "$server_config_file"
+                    echo ""
+                else
+                    warn "配置文件不存在"
+                fi
+                ;;
+            0) return ;;
+            *) err "无效选择" ;;
+        esac
+        echo ""
+        read -rp "  按 Enter 继续..." _
+    done
 }
 
-global_logs() {
-	local target="${1:-}"
-	local -a units=()
-	local unit=""
-
-	require_service_stack
-
-	if ! mapfile -t units < <(collect_matching_units "${target}"); then
-		die "未找到可查看日志的配置"
-	fi
-
-	if ((${#units[@]} == 0)); then
-		die "未找到可查看日志的配置"
-	fi
-
-	for unit in "${units[@]}"; do
-		service_logs_unit "${unit}"
-		printf '\n'
-	done
+menu_client_config() {
+    require_root
+    while true; do
+        title "客户端配置管理"
+        list_client_services
+        echo "1) 添加隧道"
+        echo "2) 编辑隧道"
+        echo "3) 删除隧道"
+        echo "4) 直接编辑配置文件"
+        echo "5) 查看配置文件"
+        echo "0) 返回主菜单"
+        echo ""
+        read -rp "  请选择 [0-5]: " choice
+        case "$choice" in
+            1) add_client_service ;;
+            2) edit_client_service ;;
+            3) delete_client_service ;;
+            4) "${EDITOR:-vi}" "$client_config_file" ;;
+            5)
+                if [[ -f "$client_config_file" ]]; then
+                    echo ""
+                    cat "$client_config_file"
+                    echo ""
+                else
+                    warn "配置文件不存在"
+                fi
+                ;;
+            0) return ;;
+            *) err "无效选择" ;;
+        esac
+        echo ""
+        read -rp "  按 Enter 继续..." _
+    done
 }
 
-global_list() {
-	list_kind_summary server
-	printf '\n'
-	list_kind_summary client
+# ────────────────────────────────────────────────────────────
+# 主菜单
+# ────────────────────────────────────────────────────────────
+main_menu() {
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}"
+        echo "  ██████╗  █████╗ ████████╗██╗  ██╗ ██████╗ ██╗     ███████╗"
+        echo "  ██╔══██╗██╔══██╗╚══██╔══╝██║  ██║██╔═══██╗██║     ██╔════╝"
+        echo "  ██████╔╝███████║   ██║   ███████║██║   ██║██║     █████╗  "
+        echo "  ██╔══██╗██╔══██║   ██║   ██╔══██║██║   ██║██║     ██╔══╝  "
+        echo "  ██║  ██║██║  ██║   ██║   ██║  ██║╚██████╔╝███████╗███████╗"
+        echo "  ╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚══════╝"
+        echo -e "${NC}"
+        echo -e "  ${DIM}rathole 管理脚本 v${SCRIPT_VERSION}${NC}"
+        echo ""
+
+        show_status
+
+        echo -e "  ${BOLD}── 安装 ──────────────────────────────${NC}"
+        echo "  1) 安装 / 更新 rathole"
+        echo ""
+        echo -e "  ${BOLD}── 配置管理 ──────────────────────────${NC}"
+        echo "  2) 服务端配置管理"
+        echo "  3) 客户端配置管理"
+        echo ""
+        echo -e "  ${BOLD}── 服务控制 ──────────────────────────${NC}"
+        echo "  4) 启动 / 停止 / 开机自启"
+        echo "  5) 重启服务"
+        echo ""
+        echo -e "  ${BOLD}── 监控 ──────────────────────────────${NC}"
+        echo "  6) 查看日志"
+        echo ""
+        echo -e "  ${BOLD}── 其他 ──────────────────────────────${NC}"
+        echo "  7) 卸载 rathole"
+        echo "  0) 退出"
+        echo ""
+        read -rp "  请选择 [0-7]: " choice
+
+        case "$choice" in
+            1) do_install ;;
+            2) menu_server_config ;;
+            3) menu_client_config ;;
+            4) manage_service_enable ;;
+            5) do_restart ;;
+            6) show_logs ;;
+            7) do_uninstall ;;
+            0)
+                echo ""
+                info "再见！"
+                exit 0
+                ;;
+            *)
+                err "无效选择，请重试"
+                ;;
+        esac
+
+        echo ""
+        read -rp "  按 Enter 继续..." _
+    done
 }
 
-show_help() {
-	cat <<EOF
-用法:
-	${SCRIPT_NAME} [--cdn URL] [command]
-
-命令:
-	install                         安装或更新 rathole
-	status [all|name]               查看运行状态
-	restart [all|name]              重启所有或指定配置
-	logs [all|name]                 查看最近 100 行日志
-	list                            列出所有配置
-	uninstall                       卸载 rathole
-	server <action> [name]          管理服务端配置
-	client <action> [name]          管理客户端配置
-	menu                            打开交互菜单
-
-支持平台:
-	systemd / Alpine OpenRC
-	Alpine x86_64 会自动安装 glibc 兼容包 gcompat（必要时回退到 libc6-compat）
-
-服务端或客户端 action:
-	add                             交互式创建配置并启动
-	edit                            打开编辑器修改配置并重启
-	delete                          删除配置并停止服务
-	status                          查看配置状态
-	restart                         重启该类型下所有配置
-	logs                            查看该类型下所有配置的日志
-	list                            列出该类型下所有配置
-
-配置文件位置:
-	${SERVER_DIR}/*.toml
-	${CLIENT_DIR}/*.toml
-
-示例:
-	${SCRIPT_NAME} install
-	${SCRIPT_NAME} --cdn https://ghfast.top install
-	${SCRIPT_NAME} server add
-	${SCRIPT_NAME} client edit mynas
-	${SCRIPT_NAME} status
-EOF
-}
-
-show_menu() {
-	local choice=""
-	local target=""
-	local name=""
-
-	while true; do
-		printf '\n'
-		printf 'rathole 一键管理脚本\n'
-		printf '1) 安装或更新 rathole\n'
-		printf '2) 添加服务端配置\n'
-		printf '3) 编辑服务端配置\n'
-		printf '4) 删除服务端配置\n'
-		printf '5) 添加客户端配置\n'
-		printf '6) 编辑客户端配置\n'
-		printf '7) 删除客户端配置\n'
-		printf '8) 查看状态\n'
-		printf '9) 重启服务\n'
-		printf '10) 查看日志\n'
-		printf '11) 卸载 rathole\n'
-		printf '0) 退出\n'
-		read -r -p '请选择: ' choice || true
-
-		case "${choice}" in
-			1)
-				install_rathole
-				;;
-			2)
-				create_config server server
-				;;
-			3)
-				edit_config server ""
-				;;
-			4)
-				delete_config server ""
-				;;
-			5)
-				create_config client client
-				;;
-			6)
-				edit_config client ""
-				;;
-			7)
-				delete_config client ""
-				;;
-			8)
-				show_global_status
-				;;
-			9)
-				restart_units all
-				;;
-			10)
-				show_logs all
-				;;
-			11)
-				uninstall_rathole
-				;;
-			0|q|Q|quit|exit)
-				exit 0
-				;;
-			*)
-				warn "无效选择"
-				;;
-		esac
-
-		printf '\n'
-		read -r -p '按回车返回菜单...' _ || true
-	done
-}
-
-uninstall_rathole() {
-	local remove_configs=""
-	local -a units=()
-	local kind=""
-	local name=""
-	local dir=""
-	local file=""
-
-	if ! confirm "确认卸载 rathole 吗"; then
-		info "已取消"
-		return 0
-	fi
-
-	for kind in server client; do
-		dir="$(kind_dir "${kind}")"
-		for file in "${dir}"/*.toml; do
-			[ -e "${file}" ] || continue
-			name="$(basename "${file}" .toml)"
-			units+=("$(unit_name "${kind}" "${name}")")
-			remove_service_definition "${kind}" "${name}"
-		done
-	done
-
-	if [ "${INIT_SYSTEM}" = "openrc" ]; then
-		for file in "${OPENRC_INIT_DIR}"/ratholes-* "${OPENRC_INIT_DIR}"/ratholec-*; do
-			[ -e "${file}" ] || continue
-			name="$(basename "${file}")"
-			units+=("${name}")
-			rm -f "${file}"
-		done
-	fi
-
-	for unit in "${units[@]}"; do
-		service_stop_unit "${unit}" >/dev/null 2>&1 || true
-		service_disable_unit "${unit}" >/dev/null 2>&1 || true
-	done
-
-	if [ "${INIT_SYSTEM}" = "systemd" ]; then
-		rm -f "${SERVER_UNIT_TEMPLATE}" "${CLIENT_UNIT_TEMPLATE}"
-	fi
-	service_daemon_reload
-
-	if [ -e "${INSTALL_BIN}" ]; then
-		rm -f "${INSTALL_BIN}"
-	fi
-
-	if [ -d "${CONFIG_ROOT}" ] && confirm "是否同时删除 ${CONFIG_ROOT} 下的全部配置文件"; then
-		rm -rf "${CONFIG_ROOT}"
-		remove_configs="yes"
-	fi
-
-	if [ "${remove_configs}" != "yes" ]; then
-		rmdir "${SERVER_DIR}" 2>/dev/null || true
-		rmdir "${CLIENT_DIR}" 2>/dev/null || true
-		rmdir "${CONFIG_ROOT}" 2>/dev/null || true
-	fi
-
-	success "rathole 已卸载"
-}
-
-main_server() {
-	local action="${1:-status}"
-	local name="${2:-}"
-
-	case "${action}" in
-		add)
-			create_config server "${name:-server}"
-			;;
-		edit)
-			edit_config server "${name}"
-			;;
-		delete)
-			delete_config server "${name}"
-			;;
-		status)
-			status_kind server "${name}"
-			;;
-		restart)
-			restart_kind server "${name}"
-			;;
-		logs)
-			logs_kind server "${name}"
-			;;
-		list)
-			list_configs server
-			;;
-		help|-h|--help)
-			show_help
-			;;
-		*)
-			die "未知服务端命令: ${action}"
-			;;
-	esac
-}
-
-main_client() {
-	local action="${1:-status}"
-	local name="${2:-}"
-
-	case "${action}" in
-		add)
-			create_config client "${name:-client}"
-			;;
-		edit)
-			edit_config client "${name}"
-			;;
-		delete)
-			delete_config client "${name}"
-			;;
-		status)
-			status_kind client "${name}"
-			;;
-		restart)
-			restart_kind client "${name}"
-			;;
-		logs)
-			logs_kind client "${name}"
-			;;
-		list)
-			list_configs client
-			;;
-		help|-h|--help)
-			show_help
-			;;
-		*)
-			die "未知客户端命令: ${action}"
-			;;
-	esac
-}
-
-parse_global_args() {
-	local -a remaining=()
-
-	while [ "$#" -gt 0 ]; do
-		case "$1" in
-			--cdn)
-				[ "$#" -ge 2 ] || die "--cdn 需要提供 URL"
-				normalize_cdn_prefix "$2"
-				shift 2
-				;;
-			--cdn=*)
-				normalize_cdn_prefix "${1#--cdn=}"
-				shift
-				;;
-			-h|--help)
-				show_help
-				exit 0
-				;;
-			--)
-				shift
-				remaining+=("$@")
-				break
-				;;
-			-*)
-				die "未知参数: $1"
-				;;
-			*)
-				remaining+=("$@")
-				break
-				;;
-		esac
-	done
-
-	if ((${#remaining[@]} == 0)); then
-		PARSED_ARGS=()
-	else
-		PARSED_ARGS=("${remaining[@]}")
-	fi
-}
-
-PARSED_ARGS=()
-
+# ────────────────────────────────────────────────────────────
+# 入口
+# ────────────────────────────────────────────────────────────
 main() {
-	local command=""
-	local action=""
-	local name=""
-
-	parse_global_args "$@"
-	set -- "${PARSED_ARGS[@]}"
-
-	if [ "$#" -eq 0 ]; then
-		if [ -t 0 ]; then
-			require_root
-			require_service_system
-			show_menu
-			exit 0
-		fi
-		show_help
-		exit 0
-	fi
-
-	command="$1"
-	shift || true
-
-	if [ "${command}" != "help" ] && [ "${command}" != "-h" ] && [ "${command}" != "--help" ]; then
-		require_root
-		require_service_system
-	fi
-
-	case "${command}" in
-		install)
-			install_rathole
-			;;
-		status)
-			show_global_status "${1:-all}"
-			;;
-		restart)
-			global_restart "${1:-all}"
-			;;
-		logs)
-			global_logs "${1:-all}"
-			;;
-		list)
-			global_list
-			;;
-		uninstall)
-			uninstall_rathole
-			;;
-		server)
-			main_server "${1:-status}" "${2:-}"
-			;;
-		client)
-			main_client "${1:-status}" "${2:-}"
-			;;
-		menu)
-			show_menu
-			;;
-		help|-h|--help)
-			show_help
-			;;
-		*)
-			die "未知命令: ${command}"
-			;;
-	esac
+    parse_args "$@"
+    detect_os
+    detect_arch
+    detect_init
+    main_menu
 }
 
 main "$@"
