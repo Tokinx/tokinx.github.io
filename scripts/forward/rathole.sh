@@ -99,6 +99,21 @@ title()   { echo -e "\n${BOLD}${CYAN}══════════════�
 step()    { echo -e "${BLUE}  ▶${NC} $*" >&2; }
 success() { echo -e "${GREEN}  ✔${NC} $*" >&2; }
 
+has_utf8_locale() {
+    local active_locale="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+    [[ "$active_locale" =~ [Uu][Tt][Ff]-?8 ]]
+}
+
+run_editor_command() {
+    if has_utf8_locale; then
+        "$@"
+        return
+    fi
+
+    warn "当前终端 locale 非 UTF-8，已临时使用 C.UTF-8 启动编辑器"
+    LANG=C.UTF-8 LC_CTYPE=C.UTF-8 LC_ALL=C.UTF-8 "$@"
+}
+
 open_editor() {
     local file="$1"
     local candidate
@@ -107,7 +122,7 @@ open_editor() {
     if [[ -n "${EDITOR:-}" ]]; then
         read -r -a editor_cmd <<<"${EDITOR}"
         if [[ ${#editor_cmd[@]} -gt 0 ]] && command -v "${editor_cmd[0]}" &>/dev/null; then
-            "${editor_cmd[@]}" "$file"
+            run_editor_command "${editor_cmd[@]}" "$file"
             return
         fi
         warn "环境变量 EDITOR 不可用: ${EDITOR}，回退到默认编辑器优先级"
@@ -115,7 +130,7 @@ open_editor() {
 
     for candidate in nano vim nvim vi; do
         if command -v "$candidate" &>/dev/null; then
-            "$candidate" "$file"
+            run_editor_command "$candidate" "$file"
             return
         fi
     done
