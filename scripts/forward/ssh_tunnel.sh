@@ -310,6 +310,12 @@ ensure_sshd_dropin() {
     block="$(cat <<EOF
 ${marker_begin}
 Match Group ${TUNNEL_GROUP}
+    # 认证方式：协议层强制只允许公钥，杜绝任何密码/键盘交互登录
+    # (即使该用户被设了密码、或全局开启了密码认证，也不会生效)
+    PubkeyAuthentication yes
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    # 仅允许端口转发，禁用 shell/X11/agent 等会话能力
     AllowTcpForwarding yes
     GatewayPorts clientspecified
     X11Forwarding no
@@ -435,6 +441,13 @@ create_system_user() {
                     "$username"
             ;;
     esac
+    # 解除"账号锁定"状态：
+    # useradd 默认将 shadow 密码字段写为 '!'，被 PAM 的 account 阶段视为 locked，
+    # 即使使用公钥认证也会被拒绝（"User xxx not allowed because account is locked"）。
+    # usermod -p '*' 在部分 Debian 版本上仍被 PAM 判为锁定，passwd -d 才彻底生效。
+    # 清空密码字段后状态变为 NP (no password)，由 sshd 的 PermitEmptyPasswords no
+    # 拦住密码登录，公钥认证可正常通过。
+    passwd -d "$username" &>/dev/null || true
 }
 
 add_user_to_tunnel_group() {
@@ -465,6 +478,13 @@ add_server_user() {
         create_system_user "$username"
     fi
     add_user_to_tunnel_group "$username"
+
+    # 自愈：复用已存在用户时，如 shadow 密码字段为锁定状态 ('!'/'!!')，清空之，
+    # 否则 PAM account 阶段会拒绝公钥登录
+    if getent shadow "$username" 2>/dev/null | awk -F: '{exit !($2=="!" || $2=="!!" || $2=="*")}'; then
+        step "解除账号锁定: $username"
+        passwd -d "$username" &>/dev/null || true
+    fi
 
     local home
     home="$(getent passwd "$username" | cut -d: -f6)"
@@ -775,6 +795,22 @@ add_client_tunnel() {
     esac
     chmod 600 "$identity_file"
 
+    # 自检：用 ssh-keygen 反推公钥，能成功才说明私钥格式真正可用
+    # 可识别：CRLF 换行、首尾行缺失、内容截断、libcrypto 解析失败等
+    if ! ssh-keygen -y -f "$identity_file" >/dev/null 2>&1; then
+        err "私钥校验失败 (ssh-keygen -y 报错)，可能原因："
+        err "  - 粘贴时丢失首尾行 (BEGIN/END PRIVATE KEY)"
+        err "  - 换行符为 CRLF (Windows 格式)，需转 LF"
+        err "  - 内容截断或包含额外字符"
+        err "建议改用 base64 方式传输: 在源端执行 base64 -w0 <privkey> 后再解码写入"
+        rm -f "$identity_file"
+        return 1
+    fi
+    local key_fp
+    key_fp="$(ssh-keygen -lf "$identity_file" 2>/dev/null | awk '{print $2}')"
+    success "私钥校验通过, 指纹: ${key_fp}"
+    info "请确认服务端 authorized_keys 中已包含相同指纹的公钥"
+
     echo ""
     case "$type" in
         reverse)
@@ -800,6 +836,37 @@ add_client_tunnel() {
             return 1
         fi
     done
+
+    # reverse 隧道默认只在服务端 127.0.0.1 监听 (即使服务端 GatewayPorts clientspecified
+    # 也需要客户端显式指定 bind 地址). 主动询问是否对外暴露, 自动补 0.0.0.0: 前缀,
+    # 避免新手以为反向隧道"已通"但其他机器访问不到
+    if [[ "$type" == "reverse" ]]; then
+        # 检测用户是否已自行指定 bind 地址 (任何一条规则带 'IP:port:host:port' 形式即视为已指定)
+        local has_bind=0
+        for f in $forwards; do
+            if [[ "$(awk -F: '{print NF}' <<<"$f")" -ge 4 ]]; then
+                has_bind=1
+                break
+            fi
+        done
+
+        if [[ $has_bind -eq 0 ]]; then
+            echo ""
+            warn "反向隧道默认只在服务端 127.0.0.1 监听，其他机器无法访问"
+            read -rp "  是否对外暴露 (绑定到 0.0.0.0)？[y/N]: " expose
+            if [[ "$expose" == "y" || "$expose" == "Y" ]]; then
+                local new_forwards=""
+                for f in $forwards; do
+                    new_forwards="${new_forwards}0.0.0.0:${f} "
+                done
+                forwards="${new_forwards% }"
+                success "已自动添加 0.0.0.0: 前缀: ${forwards}"
+                info "请确保服务端防火墙/安全组放行对应端口"
+            else
+                info "保持仅本地监听 (127.0.0.1)"
+            fi
+        fi
+    fi
 
     local extra_opts
     read -rp "  额外 SSH 选项 (可选, 例 -o ServerAliveInterval=60): " extra_opts
