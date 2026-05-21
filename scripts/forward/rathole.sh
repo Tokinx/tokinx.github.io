@@ -91,12 +91,38 @@ show_usage() {
 # ────────────────────────────────────────────────────────────
 # 输出工具函数
 # ────────────────────────────────────────────────────────────
-info()    { echo -e "${GREEN}[INFO]${NC}  $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+# 所有 UI 输出函数均输出到 stderr，防止被 $(...) 命令替换捕获污染变量
+info()    { echo -e "${GREEN}[INFO]${NC}  $*" >&2; }
+warn()    { echo -e "${YELLOW}[WARN]${NC}  $*" >&2; }
 err()     { echo -e "${RED}[ERROR]${NC} $*" >&2; }
-title()   { echo -e "\n${BOLD}${CYAN}══════════════════════════════${NC}"; echo -e "${BOLD}${CYAN}  $*${NC}"; echo -e "${BOLD}${CYAN}══════════════════════════════${NC}"; }
-step()    { echo -e "${BLUE}  ▶${NC} $*"; }
-success() { echo -e "${GREEN}  ✔${NC} $*"; }
+title()   { echo -e "\n${BOLD}${CYAN}══════════════════════════════${NC}" >&2; echo -e "${BOLD}${CYAN}  $*${NC}" >&2; echo -e "${BOLD}${CYAN}══════════════════════════════${NC}" >&2; }
+step()    { echo -e "${BLUE}  ▶${NC} $*" >&2; }
+success() { echo -e "${GREEN}  ✔${NC} $*" >&2; }
+
+open_editor() {
+    local file="$1"
+    local candidate
+    local -a editor_cmd=()
+
+    if [[ -n "${EDITOR:-}" ]]; then
+        read -r -a editor_cmd <<<"${EDITOR}"
+        if [[ ${#editor_cmd[@]} -gt 0 ]] && command -v "${editor_cmd[0]}" &>/dev/null; then
+            "${editor_cmd[@]}" "$file"
+            return
+        fi
+        warn "环境变量 EDITOR 不可用: ${EDITOR}，回退到默认编辑器优先级"
+    fi
+
+    for candidate in nano vim nvim vi; do
+        if command -v "$candidate" &>/dev/null; then
+            "$candidate" "$file"
+            return
+        fi
+    done
+
+    err "未找到可用编辑器，请安装 nano、vim、nvim 或 vi，或设置有效的 EDITOR 环境变量"
+    return 1
+}
 
 # ────────────────────────────────────────────────────────────
 # 系统检测
@@ -597,7 +623,7 @@ edit_server_service() {
         err "隧道 '${svc_name}' 不存在"
         return 1
     fi
-    "${EDITOR:-vi}" "$server_config_file"
+    open_editor "$server_config_file"
     success "配置已保存，建议重启服务以生效"
 }
 
@@ -725,7 +751,7 @@ edit_client_service() {
         err "隧道 '${svc_name}' 不存在"
         return 1
     fi
-    "${EDITOR:-vi}" "$client_config_file"
+    open_editor "$client_config_file"
     success "配置已保存，建议重启服务以生效"
 }
 
@@ -968,7 +994,7 @@ menu_server_config() {
             1) add_server_service ;;
             2) edit_server_service ;;
             3) delete_server_service ;;
-            4) "${EDITOR:-vi}" "$server_config_file" ;;
+            4) open_editor "$server_config_file" ;;
             5)
                 if [[ -f "$server_config_file" ]]; then
                     echo ""
@@ -1003,7 +1029,7 @@ menu_client_config() {
             1) add_client_service ;;
             2) edit_client_service ;;
             3) delete_client_service ;;
-            4) "${EDITOR:-vi}" "$client_config_file" ;;
+            4) open_editor "$client_config_file" ;;
             5)
                 if [[ -f "$client_config_file" ]]; then
                     echo ""
