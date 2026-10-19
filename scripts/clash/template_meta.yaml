@@ -11,25 +11,21 @@ dns:
   ipv6: true
   prefer-h3: false
   default-nameserver:
-    - 119.29.29.29                       # Tencent DNS (DNSPod)
-    - 223.5.5.5                          # AliDNS
+    - 119.29.29.29
+    - 223.5.5.5
     - 1.1.1.1
     - 8.8.8.8
   nameserver:
-    - https://doh.pub/dns-query          # Tencent DoH
-    - https://dns.alidns.com/dns-query   # AliDNS DoH
+    - https://doh.pub/dns-query
+    - https://dns.alidns.com/dns-query
     - https://1.1.1.1/dns-query
     - https://8.8.8.8/dns-query
-    - 119.29.29.29                       # Tencent DNS (DNSPod)
-    - 223.5.5.5                          # AliDNS
+    - 119.29.29.29
+    - 223.5.5.5
     - 1.1.1.1
     - 8.8.8.8
   nameserver-policy:
-    geosite:cn:
-      - https://doh.pub/dns-query
-      - https://dns.alidns.com/dns-query
-      - https://1.12.12.12/dns-query
-      - https://223.5.5.5/dns-query
+    'geosite:cn': system
   proxy-server-nameserver:
     - https://doh.pub/dns-query
     - https://dns.alidns.com/dns-query
@@ -43,35 +39,35 @@ sniffer:
     - tls
     - http
   force-domain:
-    - "+.openai.com"
-    - "+.chatgpt.com"
-    - "+.anthropic.com"
-    - "+.claude.ai"
-    - "+.x.ai"
-    - "+.grok.x.ai"
-    - "+.perplexity.ai"
-    - "+.pplx.ai"
-    - "+.cohere.ai"
-    - "+.cohere.com"
-    - "+.mistral.ai"
-    - "+.together.ai"
-    - "+.together.xyz"
-    - "+.openrouter.ai"
-    - "+.huggingface.co"
-    - "+.stability.ai"
-    - "+.replicate.com"
+    - +.openai.com
+    - +.chatgpt.com
+    - +.anthropic.com
+    - +.claude.ai
+    - +.x.ai
+    - +.grok.x.ai
+    - +.perplexity.ai
+    - +.pplx.ai
+    - +.cohere.ai
+    - +.cohere.com
+    - +.mistral.ai
+    - +.together.ai
+    - +.together.xyz
+    - +.openrouter.ai
+    - +.huggingface.co
+    - +.stability.ai
+    - +.replicate.com
   skip-domain:
-    - "msftconnecttest.com"
-    - "msftncsi.com"
-proxies:
+    - msftconnecttest.com
+    - msftncsi.com
+proxies: null
 proxy-groups:
-  # 基础选择器
   - name: 默认节点
     type: select
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/liuliang(5).png
     proxies:
+      - DIRECT
       - <all>
-  # 业务分流
+      - <countries>
   - name: 编程开发
     type: select
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/ChatGPT.png
@@ -79,20 +75,25 @@ proxy-groups:
       - DIRECT
       - 默认节点
       - <all>
+      - <countries>
   - name: 影音娱乐
     type: select
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/DisneyPlus.png
     proxies:
       - DIRECT
       - 默认节点
+      - 磁力下载
       - <all>
-  - name: 游戏平台
+      - <countries>
+  - name: 金融服务
     type: select
-    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/steam(1).png
+    icon: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/icon/color/bitcloud.png
     proxies:
       - DIRECT
       - 默认节点
+      - 编程开发
       - <all>
+      - <countries>
   - name: 磁力下载
     type: select
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Thunder.png
@@ -100,6 +101,18 @@ proxy-groups:
       - DIRECT
       - 默认节点
       - <all>
+      - <countries>
+  - name: 游戏平台
+    type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/steam(1).png
+    proxies:
+      - DIRECT
+      - 默认节点
+      - 编程开发
+      - 影音娱乐
+      - 磁力下载
+      - <all>
+      - <countries>
   - name: Google
     type: select
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Google.png
@@ -108,6 +121,8 @@ proxy-groups:
       - 默认节点
       - 编程开发
       - 影音娱乐
+      - 磁力下载
+      - <countries>
   - name: Microsoft
     type: select
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Microsoft.png
@@ -116,6 +131,8 @@ proxy-groups:
       - 默认节点
       - 编程开发
       - 影音娱乐
+      - 磁力下载
+      - <countries>
   - name: Apple
     type: select
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/Apple_01.png
@@ -124,6 +141,19 @@ proxy-groups:
       - 默认节点
       - 编程开发
       - 影音娱乐
+      - 磁力下载
+      - <countries>
+  - name: Talkatone
+    type: select
+    icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/WhatsApp.png
+    proxies:
+      - DIRECT
+      - 默认节点
+      - 编程开发
+      - 影音娱乐
+      - 磁力下载
+      - <all>
+      - <countries>
   - name: 广告拦截
     type: select
     icon: https://raw.githubusercontent.com/fmz200/wool_scripts/main/icons/apps/AdGuard.png
@@ -173,6 +203,24 @@ rule-providers:
     path: ./ruleset/PayPal.yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/PayPal/PayPal.yaml
     interval: 86400
+  Binance:
+    type: http
+    behavior: classical
+    path: ./ruleset/Binance.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Binance/Binance.yaml
+    interval: 86400
+  OKX:
+    type: http
+    behavior: classical
+    path: ./ruleset/OKX.yaml
+    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/OKX/OKX.yaml
+    interval: 86400
+  Bybit:
+    type: http
+    behavior: classical
+    path: ./ruleset/Bybit.yaml
+    url: https://raw.githubusercontent.com/Tokinx/tokinx.github.io/master/scripts/clash/rules/Bybit.yaml
+    interval: 86400
   Talkatone:
     type: http
     behavior: classical
@@ -213,26 +261,26 @@ rule-providers:
     type: http
     behavior: classical
     path: ./ruleset/Copilot.yaml
-    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Copilot/Copilot.yaml
+    url: https://raw.githubusercontent.com/Tokinx/tokinx.github.io/master/scripts/clash/rules/Copilot.yaml
     interval: 86400
-  MicrosoftEdge:
+  Cursor:
     type: http
     behavior: classical
-    path: ./ruleset/MicrosoftEdge.yaml
-    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/MicrosoftEdge/MicrosoftEdge.yaml
+    path: ./ruleset/Cursor.yaml
+    url: https://raw.githubusercontent.com/SkywalkerJi/Clash-Rules/refs/heads/master/AI/Cursor.yaml
     interval: 86400
-  Cloudflare:
+  Meta:
     type: http
     behavior: classical
-    path: ./ruleset/Cloudflare.yaml
-    url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Cloudflare/Cloudflare.yaml
+    path: ./ruleset/Meta.yaml
+    url: https://raw.githubusercontent.com/SkywalkerJi/Clash-Rules/refs/heads/master/AI/Meta.yaml
     interval: 86400
-  # YouTube:
-  #   type: http
-  #   behavior: classical
-  #   path: ./ruleset/YouTube.yaml
-  #   url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/YouTube/YouTube.yaml
-  #   interval: 86400
+  xAI:
+    type: http
+    behavior: classical
+    path: ./ruleset/xAI.yaml
+    url: https://raw.githubusercontent.com/SkywalkerJi/Clash-Rules/refs/heads/master/AI/xAI.yaml
+    interval: 86400
   YouTube:
     type: http
     behavior: classical
@@ -299,7 +347,6 @@ rule-providers:
     path: ./ruleset/ChinaMax_IP.yaml
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax_IP/ChinaMax_IP.yaml
     interval: 86400
-  # 游戏平台
   Game:
     type: http
     behavior: classical
@@ -307,7 +354,6 @@ rule-providers:
     url: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Game/Game.yaml
     interval: 86400
 rules:
-  # 局域网与本机优先直连
   - DOMAIN,localhost,DIRECT
   - DOMAIN-SUFFIX,local,DIRECT
   - IP-CIDR,127.0.0.1/8,DIRECT,no-resolve
@@ -318,47 +364,41 @@ rules:
   - IP-CIDR6,::1/128,DIRECT,no-resolve
   - IP-CIDR6,fc00::/7,DIRECT,no-resolve
   - IP-CIDR6,fe80::/10,DIRECT,no-resolve
-  # 局域网与常见私有网段直连
   - RULE-SET,LAN,DIRECT
-  # 广告拦截
-  # - RULE-SET,Advertising,广告拦截
-  # 编程相关流量
+  - RULE-SET,ChinaMax,DIRECT
+  - RULE-SET,ChinaMax_IP,DIRECT
+  - GEOIP,CN,DIRECT
+  - AND,((NETWORK,UDP),(DST-PORT,443)),REJECT
+  - RULE-SET,Talkatone,Talkatone
   - RULE-SET,GitHub,编程开发
   - RULE-SET,OpenAI,编程开发
   - RULE-SET,Claude,编程开发
   - RULE-SET,Anthropic,编程开发
   - RULE-SET,Copilot,编程开发
-  - RULE-SET,MicrosoftEdge,编程开发
-  - DOMAIN-SUFFIX,x.ai,编程开发
-  - DOMAIN-SUFFIX,grok.x.ai,编程开发
-  - DOMAIN-SUFFIX,grok.com,编程开发
+  - RULE-SET,Cursor,编程开发
+  - RULE-SET,Meta,编程开发
+  - RULE-SET,xAI,编程开发
   - DOMAIN-SUFFIX,perplexity.ai,编程开发
-  - DOMAIN-SUFFIX,api.perplexity.ai,编程开发
   - DOMAIN-SUFFIX,pplx.ai,编程开发
   - DOMAIN-SUFFIX,cohere.com,编程开发
   - DOMAIN-SUFFIX,cohere.ai,编程开发
-  - DOMAIN-SUFFIX,api.cohere.ai,编程开发
   - DOMAIN-SUFFIX,mistral.ai,编程开发
-  - DOMAIN-SUFFIX,api.mistral.ai,编程开发
   - DOMAIN-SUFFIX,together.ai,编程开发
   - DOMAIN-SUFFIX,together.xyz,编程开发
-  - DOMAIN-SUFFIX,api.together.xyz,编程开发
   - DOMAIN-SUFFIX,openrouter.ai,编程开发
-  - DOMAIN-SUFFIX,api.openrouter.ai,编程开发
   - DOMAIN-SUFFIX,huggingface.co,编程开发
-  - DOMAIN-SUFFIX,api-inference.huggingface.co,编程开发
   - DOMAIN-SUFFIX,stability.ai,编程开发
-  - DOMAIN-SUFFIX,api.stability.ai,编程开发
   - DOMAIN-SUFFIX,replicate.com,编程开发
   - DOMAIN-SUFFIX,replicate.ai,编程开发
-  - DOMAIN-SUFFIX,api.replicate.com,编程开发
+  - DOMAIN-SUFFIX,sora.com,编程开发
+  - DOMAIN-SUFFIX,midjourney.com,编程开发
   - RULE-SET,Gemini,Google
-  # 固定IP服务
   - RULE-SET,PayPal,编程开发
-  - RULE-SET,Talkatone,编程开发
-  # 平台分流
+  - RULE-SET,Binance,金融服务
+  - RULE-SET,OKX,金融服务
+  - RULE-SET,Bybit,金融服务
+  - DOMAIN-SUFFIX,coinbase.com,金融服务
   - RULE-SET,YouTube,影音娱乐
-  - DOMAIN,music.youtube.com,影音娱乐
   - RULE-SET,Spotify,影音娱乐
   - RULE-SET,Netflix,影音娱乐
   - RULE-SET,DisneyPlus,影音娱乐
@@ -372,12 +412,4 @@ rules:
   - RULE-SET,Microsoft,Microsoft
   - RULE-SET,OneDrive,Microsoft
   - RULE-SET,Apple,Apple
-  # CDN加速节点
-  - RULE-SET,Cloudflare,默认节点
-  # 大陆直连
-  - RULE-SET,ChinaMax,DIRECT
-  - RULE-SET,ChinaMax_IP,DIRECT
-  - GEOIP,CN,DIRECT
-  - DOMAIN-KEYWORD,bilibili,DIRECT
-  # 漏网之鱼
   - MATCH,默认节点
