@@ -57,5 +57,6 @@ payload:
   - DOMAIN,msedge.api.cdp.microsoft.com
 # Copilot (Microsoft Office)
   - DOMAIN,mss.office.com
+  - DOMAIN,arc.msn.com
   - DOMAIN-SUFFIX,sydney.bing.com
   - DOMAIN,config.edge.skype.com
