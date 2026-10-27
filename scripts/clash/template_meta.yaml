@@ -280,7 +280,8 @@ rule-providers:
     type: http
     behavior: classical
     path: ./ruleset/xAI.yaml
-    url: https://raw.githubusercontent.com/SkywalkerJi/Clash-Rules/refs/heads/master/AI/xAI.yaml
+    # url: https://raw.githubusercontent.com/SkywalkerJi/Clash-Rules/refs/heads/master/AI/xAI.yaml
+    url: https://raw.githubusercontent.com/Tokinx/tokinx.github.io/master/scripts/clash/rules/xAI.yaml
     interval: 86400
   YouTube:
     type: http
