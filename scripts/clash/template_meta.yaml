@@ -273,7 +273,8 @@ rule-providers:
     type: http
     behavior: classical
     path: ./ruleset/Meta.yaml
-    url: https://raw.githubusercontent.com/SkywalkerJi/Clash-Rules/refs/heads/master/AI/Meta.yaml
+    # url: https://raw.githubusercontent.com/SkywalkerJi/Clash-Rules/refs/heads/master/AI/Meta.yaml
+    url: https://raw.githubusercontent.com/Tokinx/tokinx.github.io/master/scripts/clash/rules/Meta.yaml
     interval: 86400
   xAI:
     type: http
