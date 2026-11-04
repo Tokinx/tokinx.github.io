@@ -2,3 +2,4 @@
 CLAUDE.md
 *.pyc
 .magi
+.DS_Store
